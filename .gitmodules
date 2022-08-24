@@ -1,0 +1,3 @@
+[submodule "rust-radio-sx127x"]
+	path = rust-radio-sx127x
+	url = https://github.com/fusetim/rust-radio-sx127x.git
