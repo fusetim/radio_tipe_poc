@@ -5,6 +5,7 @@ use std::fmt::Debug;
 
 pub mod error;
 pub mod socket;
+pub mod device;
 
 use error::Result;
 use socket::LoRaSocket;
@@ -15,6 +16,4 @@ pub enum LoRaDestination<'a> {
     Unique(LoRaAddress),
 }
 
-pub struct LoRaAddress {
-    identifier: u32,
-}
+pub type LoRaAddress = u16;

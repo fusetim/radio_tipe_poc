@@ -1,14 +1,16 @@
+use crate::LoRaAddress;
+
 pub trait Device<'a> {
     type DeviceError;
 
-    pub fn set_transmit_client(&mut self, client: &'a dyn TxClient);
-    pub fn set_receive_client(&mut self, client: &'a dyn RxClient);
-    pub fn set_address(&mut self, address: LoRaAddress);
-    pub fn get_address(&self) -> &LoRaAddress;
-    pub fn is_transmitting(&mut self) -> Result<bool, Self::DeviceError>;
-    pub fn is_receiving(&mut self) -> Result<bool, Self::DeviceError>;
-    pub fn transmit();
-    pub fn start_reception();
+    fn set_transmit_client(&mut self, client: &'a dyn TxClient);
+    fn set_receive_client(&mut self, client: &'a dyn RxClient);
+    fn set_address(&mut self, address: LoRaAddress);
+    fn get_address(&self) -> &LoRaAddress;
+    fn is_transmitting(&mut self) -> Result<bool, Self::DeviceError>;
+    fn is_receiving(&mut self) -> Result<bool, Self::DeviceError>;
+    fn transmit();
+    fn start_reception();
 }
 
 pub trait TxClient {
