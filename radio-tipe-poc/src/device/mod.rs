@@ -1,4 +1,4 @@
-pub mod radio;
-pub mod frame;
 mod device;
+pub mod frame;
+pub mod radio;
 pub use device::*;

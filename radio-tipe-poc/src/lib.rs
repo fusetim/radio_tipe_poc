@@ -1,18 +1,13 @@
-use embedded_hal::blocking::delay::{DelayMs, DelayUs};
-use radio::{Power, Receive, Transmit};
-use std::collections::HashMap;
-use std::fmt::Debug;
-
+pub mod device;
 pub mod error;
 pub mod socket;
-pub mod device;
 
 use error::Result;
 use socket::LoRaSocket;
 
-pub enum LoRaDestination<'a> {
+pub enum LoRaDestination {
     Global,
-    Group(&'a [LoRaAddress]),
+    Group(Vec<LoRaAddress>),
     Unique(LoRaAddress),
 }
 
