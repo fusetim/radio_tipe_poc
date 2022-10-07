@@ -7,7 +7,7 @@ pub enum QueueError<T> {
     #[error("Internal device error. Error not linked to queue being full, no need to transmit.")]
     DeviceError(#[from] T),
     #[error("Queue is full. Transmit first to clear the queue and try again.")]
-    QueueFullError(#[from] T),
+    QueueFullError(#[source] T),
 }
 
 pub trait Device<'a> {
@@ -36,7 +36,7 @@ pub trait Device<'a> {
     /// Flush the packet queue and transmit it using its current state.
     ///
     /// NO-OP if the queue is empty.
-    fn transmit(&mut self);
+    fn transmit(&mut self) -> Result<(), Self::DeviceError>;
 
     /// Put the device in listening mode, waiting to recieve new packets on its address.
     fn start_reception(&mut self);

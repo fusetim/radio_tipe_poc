@@ -1,3 +1,15 @@
+pub enum FrameType {
+    Message = 0,
+    Acknowledgment = 1,
+    RelayAnnouncement = 2,
+    RelayAnnouncementAcknowledgment = 3,
+    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
+    RelayAcknowledgment = 5, // Use the same Frame template as Acknowledgment, just a different FrameType.
+    BroadcastCheckSignal = 6,
+    BroadcastCheckSignalReply = 7,
+}
+
+
 /// Trait to calculate size on frame for every component on frame.
 pub trait FrameSize {
     /// Calculate compenent size on frame (meaning encoded) in bytes.
@@ -16,6 +28,7 @@ pub struct RadioHeaders {
     /// Sender address
     pub sender: AddressHeader,
     //stats: (),
+    pub nonce: u16,
 }
 
 /// Full representation of a Radio frame with headers and payloads.
@@ -284,6 +297,8 @@ impl RadioHeaders {
         let src_raw: u16 = self.sender.into();
         bytes.append(&mut src_raw.to_be_bytes().to_vec());
         bytes.push(self.payloads.to_be());
+        let nonce_raw: u16 = self.nonce.into();
+        bytes.append(&mut nonce_raw.to_be_bytes().to_vec());
         bytes
     }
 
@@ -311,14 +326,24 @@ impl RadioHeaders {
             });
         };
         let payloads = u8::from_be(bytes[read + 3]);
+        let mut nonce_raw = [0u8; 2];
+        let nonce = u16::from_be_bytes(nonce_raw);
+        if bytes.len() < read + 6 {
+            return Err(FrameError::InvalidHeader {
+                context: Some(format!(
+                    "Badly formatted frame, missing nonce!"
+                )),
+            });
+        };
         Ok((
             RadioHeaders {
                 rec_n_frames,
                 recipients,
                 payloads,
                 sender,
+                nonce,
             },
-            read + 4,
+            read + 6,
         ))
     }
 }
@@ -423,6 +448,7 @@ impl FrameSize for RadioHeaders {
             + self.recipients.size()
             + self.payloads.size()
             + self.sender.size()
+            + self.nonce.size()
     }
 }
 

@@ -6,18 +6,20 @@ use std::fmt::Debug;
 use super::device::{Device, QueueError, RxClient, TxClient};
 use crate::{LoRaAddress, LoRaDestination};
 use std::marker::PhantomData;
+use std::time::{Instant, Duration};
 
 use super::frame;
-use frame::FrameSize;
+use frame::{FrameSize, FrameType};
 
 const MAX_FRAME_LENGTH: usize = MAX_LORA_PAYLOAD * 5;
 const MAX_LORA_PAYLOAD: usize = 253;
 
 #[derive(Debug, Copy, Clone)]
 pub struct DelayParams {
-    duty_cycle: f32,
+    duty_cycle: f64,
     min_delay: u64,  //us
     poll_delay: u64, //us
+    duty_interval: u64 //us
 }
 
 #[derive(Debug, Clone)]
@@ -64,13 +66,14 @@ where
     E: Debug,
 {
     radio: T,
-    signal_channel: Channel<C>,
-    transmission_channels: &'a [Channel<C>],
+    channels: &'a [Channel<C>],
+    channel_usages: Vec<(Instant, Duration)>,
     rx_client: Option<&'a dyn RxClient>,
     tx_client: Option<&'a dyn TxClient>,
     tx_buffer: Vec<LoRaMessage>,
     tx_frame: Option<frame::RadioFrameWithHeaders>,
     rx_buffer: Option<(u8, Vec<u8>)>,
+    acknowledgments: HashMap<[u8; 64], Instant>,
     address: LoRaAddress,
     phantom: PhantomData<E>,
 }
@@ -84,22 +87,24 @@ where
     /// Initialize a new LoRa radio as device.
     pub fn new(
         radio: T,
-        signal_channel: Channel<C>,
-        transmission_channels: &'a [Channel<C>],
+        channels: &'a [Channel<C>],
         rx_client: Option<&'a dyn RxClient>,
         tx_client: Option<&'a dyn TxClient>,
         address: LoRaAddress,
     ) -> Self {
+        assert!(channels.len() > 0, "No channel declared!");
+        let usages = channels.iter().map(|ch| (Instant::now(), Duration::ZERO)).collect();
         Self {
             radio,
-            signal_channel,
-            transmission_channels,
+            channels,
             rx_client,
             tx_client,
             address,
             tx_buffer: Vec::new(),
             rx_buffer: None,
             tx_frame: None,
+            channel_usages: usages,
+            acknowledgments: HashMap::new(),
             phantom: PhantomData,
         }
     }
@@ -107,7 +112,7 @@ where
     fn build_trame(
         &self,
         buffer: &Vec<LoRaMessage>,
-    ) -> Result<frame::RadioFrameWithHeaders, RadioError> {
+    ) -> Result<frame::RadioFrameWithHeaders, RadioError<E>> {
         let mut recipients: HashMap<frame::AddressHeader, frame::PayloadFlag> = HashMap::new();
         let mut payloads: Vec<frame::Payload> = Vec::new();
         for (id, msg) in buffer.iter().enumerate() {
@@ -130,6 +135,7 @@ where
                     recipients: frame::RecipientHeader::Direct(recipients.iter().map(|(dest, pf)| *dest).next().expect("First recipient does not exist while there is one recipient registered!")),
                     payloads: payloads.len() as u8,
                     sender: self.address.into(),
+                    nonce: 0, // TODO: implement nonce!!
                 };
                 let mut frame = frame::RadioFrameWithHeaders { headers, payloads };
                 let len = frame.size();
@@ -146,6 +152,7 @@ where
                     recipients: frame::RecipientHeader::Group(recipients.into_iter().collect()),
                     payloads: payloads.len() as u8,
                     sender: self.address.into(),
+                    nonce: 0, // TODO: Implement nonce!!
                 };
                 let mut frame = frame::RadioFrameWithHeaders { headers, payloads };
                 let len = frame.size();
@@ -164,7 +171,7 @@ where
 }
 
 impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, E> {
-    type DeviceError = RadioError;
+    type DeviceError = RadioError<E>;
 
     fn set_transmit_client(&mut self, client: &'a dyn TxClient) {
         self.tx_client = Some(client);
@@ -203,7 +210,8 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
         dest: LoRaDestination,
         payload: &'b [u8],
         ack: bool,
-    ) -> Result<(), Self::DeviceError> {
+    ) -> Result<(), QueueError<Self::DeviceError>> {
+        // Construct of the recipient list.
         let recipients = match dest {
             LoRaDestination::Global if ack => vec![frame::GLOBAL_ACKNOWLEDGMENT],
             LoRaDestination::Global => vec![frame::GLOBAL_NO_ACKNOWLEDGMENT],
@@ -222,13 +230,14 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
                 })
                 .collect(),
         };
-        if recipients.len() > 48 {
+        if recipients.len() > 48 { // By design, a packet can only transmit up to 48 clients at a time.
             return Err(QueueError::QueueFullError(
                 RadioError::InvalidRecipentsError {
                     context: format!("Too many recipients : {}/48", recipients.len()),
                 },
             ));
         }
+        // Build the new packet with the future queue and check if it is valid.
         let mut buf = self.tx_buffer.clone();
         buf.push(LoRaMessage {
             dest: recipients,
@@ -248,9 +257,59 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
             Err(err) => Err(QueueError::DeviceError(err)),
         }
     }
-    fn transmit(&mut self) {
-        unimplemented!()
+    fn transmit(&mut self) -> Result<(), Self::DeviceError> {
+        // Ignore if no trame is available
+        if let None = self.tx_frame {
+            return Ok(());
+        }
+        // Report busy device
+        if self.is_transmitting()? {
+            return Err(RadioError::BusyDevice);
+        }
+        let now = Instant::now();
+        let frame = self.tx_frame.as_ref().unwrap();
+        let nframes = frame.headers.rec_n_frames.get_frames() as usize;
+        // Checking availability of channels
+        for (i,ch) in self.channels.iter().enumerate().take(nframes) {
+            let (last_used, consumed) = self.channel_usages[i];
+            if ((last_used - now) < Duration::from_secs(ch.delay.duty_interval) && consumed.as_secs_f64() / (ch.delay.duty_interval as f64) > ch.delay.duty_cycle) {
+                return Err(RadioError::DutyCycleConsumed);
+            }
+            if (last_used.elapsed() < Duration::from_micros(ch.delay.min_delay)) {
+                return Err(RadioError::MinChannelDelayError);
+            }
+        }
+        let bytes = frame.to_bytes();
+        let mut fcursor = 0;
+        let mut buf = Vec::with_capacity(MAX_LORA_PAYLOAD+1);
+        let mut last = Instant::now();
+        for ch in self.channels.iter().take(nframes) {
+            // TODO: Better Error distinction for Internal Radio Error.
+            self.radio.set_channel(&ch.radio_channel).map_err(|src| RadioError::InternalRadioError(src))?;
+            buf.push((FrameType::Message as u8).to_be());
+            buf.extend_from_slice(&bytes[fcursor*MAX_LORA_PAYLOAD..(fcursor+1)*MAX_LORA_PAYLOAD]);
+            if fcursor > 0 { // Wait the 600ms period.
+                if let Some(delay) = 600_u32.checked_sub(last.elapsed().as_millis() as u32) {
+                    self.radio.delay_ms(delay);
+                }
+            }
+            last = Instant::now();
+            self.radio.start_transmit(&buf).map_err(|src| RadioError::InternalRadioError(src))?;
+            buf.clear();
+            fcursor+=1;
+            self.radio.delay_ms(400); // TODO: Adapt delay to the real ToA (from Channel info), 
+            // currently it will be always : 400ms ToA + 200ms of space.
+            while (!self.radio.check_transmit().map_err(|src| RadioError::InternalRadioError(src))?) {
+                self.radio.delay_ms(10);
+            }
+            if (last.elapsed().as_millis() > 600) {
+                return Err(RadioError::OutOfSync{ context: format!("Frame transmission + channel change should have happened in 600ms, but it is already {}ms late.", last.elapsed().as_millis()-600)});
+            }
+        }
+        self.tx_frame = None;
+        Ok(())
     }
+    
     fn start_reception(&mut self) {
         unimplemented!()
     }
@@ -264,15 +323,31 @@ struct LoRaMessage {
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum RadioError {
+pub enum RadioError<R> 
+where R: Debug {
     #[error("Frame is too big to be transmit (is: {}B, max: {}B)!", .size, MAX_FRAME_LENGTH)]
     TooBigFrameError { size: usize },
+
+    #[error("Device failed to respect the sync interval.\nContext: {}", .context)]
+    OutOfSync{ context: String },
 
     #[error("Invalid recipients error, might suggest there is too many or 0 recipients. One recipient might be an invalid address.\nContext: {}", .context)]
     InvalidRecipentsError { context: String },
 
     #[error("Bad frame error.")]
     FrameError(#[from] frame::FrameError),
+
+    #[error("Busy device.")]
+    BusyDevice,
+
+    #[error("One or more channel has consumed all of their dutycycle. Need to wait...")]
+    DutyCycleConsumed,
+
+    #[error("Minimum delay for one or more channel are not entirely elapsed. Need to wait...")]
+    MinChannelDelayError,
+
+    #[error("Internal radio error.")]
+    InternalRadioError(#[source] R),
 
     #[error("Unknown radio error. Context: {}", .context)]
     Unknown { context: String },
