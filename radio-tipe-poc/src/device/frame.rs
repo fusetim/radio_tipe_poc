@@ -9,7 +9,6 @@ pub enum FrameType {
     BroadcastCheckSignalReply = 7,
 }
 
-
 /// Trait to calculate size on frame for every component on frame.
 pub trait FrameSize {
     /// Calculate compenent size on frame (meaning encoded) in bytes.
@@ -330,9 +329,7 @@ impl RadioHeaders {
         let nonce = u16::from_be_bytes(nonce_raw);
         if bytes.len() < read + 6 {
             return Err(FrameError::InvalidHeader {
-                context: Some(format!(
-                    "Badly formatted frame, missing nonce!"
-                )),
+                context: Some(format!("Badly formatted frame, missing nonce!")),
             });
         };
         Ok((
