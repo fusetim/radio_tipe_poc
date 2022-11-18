@@ -10,6 +10,12 @@ pub enum QueueError<T> {
     QueueFullError(#[source] T),
 }
 
+/// Radio Device trait, representation for a specific device implementing the protocol.
+///
+/// TODO: Give default implementation for most of the inner method when they are not related to
+/// a specifi radio implementation.
+///
+/// TODO: Implement a Mock device using the MockRadio provided by the radio crate.
 pub trait Device<'a> {
     type DeviceError;
 
@@ -39,7 +45,19 @@ pub trait Device<'a> {
     fn transmit(&mut self) -> Result<(), Self::DeviceError>;
 
     /// Put the device in listening mode, waiting to recieve new packets on its address.
-    fn start_reception(&mut self);
+    ///
+    /// Periodical check need to be made with [[Device::check_reception]] to poll internal radio state
+    /// and retrieve the received message by the physical device.
+    fn start_reception(&mut self) -> Result<(), Self::DeviceError>;
+
+    /// Check reception of messages by the physical radio.
+    ///
+    /// Periodical check need to be made with this method to poll internal radio state
+    /// and retrieve the received message by the physical device.
+    ///
+    /// Note that this method can fail if the physical radio is not in reception mode (you should use
+    /// [[Device::start_reception]] for that). Ypu might check this mode by using [[Device::is_listening]].
+    fn check_reception(&mut self) -> Result<bool, Self::DeviceError>;
 
     /// Add given payload as packet to the internal queue.
     ///
@@ -67,5 +85,5 @@ pub trait TxClient {
 /// Trait that act like a callback: this function will be called when the device will receive new payloads.
 pub trait RxClient {
     /// Device has received the given message.
-    fn receive(&self);
+    fn receive(&mut self, sender: u16, payload: Vec<u8>);
 }

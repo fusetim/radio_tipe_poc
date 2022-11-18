@@ -165,7 +165,7 @@ impl PayloadFlag {
     }
 
     pub fn push(&mut self, id: u8) {
-        self.0 |= (1 << (id - 1));
+        self.0 |= 1 << (id - 1);
     }
 
     pub fn to_message_ids(&self) -> Vec<u8> {

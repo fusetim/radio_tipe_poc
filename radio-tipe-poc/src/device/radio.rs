@@ -1,7 +1,9 @@
 use embedded_hal::blocking::delay::{DelayMs, DelayUs};
-use radio::{Power, Receive, State, Transmit};
-use std::collections::{HashMap, HashSet};
+use radio::{Interrupts, Power, Receive, State, Transmit};
+use std::collections::HashMap;
 use std::fmt::Debug;
+use log::{warn, debug, trace, log_enabled};
+use log::Level::Debug;
 
 use super::device::{Device, QueueError, RxClient, TxClient};
 use crate::{LoRaAddress, LoRaDestination};
@@ -9,11 +11,16 @@ use std::marker::PhantomData;
 use std::time::{Duration, Instant};
 
 use super::frame;
-use frame::{FrameSize, FrameType};
+use frame::{FrameSize, FrameType, RadioHeaders, RecipientHeader};
 
 const MAX_FRAME_LENGTH: usize = MAX_LORA_PAYLOAD * 5;
 const MAX_LORA_PAYLOAD: usize = 253;
+const MAX_ATTEMPT_FREE_CHANNEL: usize = 25; // A try = 200ms wait
 
+/// Channel representation of legal regulations on the use of electromagnetic bands.
+///
+/// This includes but not limits to duty cycle (max Time on Air usage on a specific period), and
+/// minimum delay between transmission and poll.
 #[derive(Debug, Copy, Clone)]
 pub struct DelayParams {
     duty_cycle: f64,
@@ -22,6 +29,8 @@ pub struct DelayParams {
     duty_interval: u64, //us
 }
 
+/// Channel super-representation, including the specific Lora Channel to use on the device and its
+/// delay parameters (see [DelayParams]).
 #[derive(Debug, Clone)]
 pub struct Channel<C>
 where
@@ -33,12 +42,24 @@ where
 
 type RadioState = radio_sx127x::device::State;
 
+/// Radio physical device representation.
+//
+// TODO: Remove dependencies to radio_sx127x, using a generic trait with the companion types specifying
+// the HAL-specific interfaces.
+/*
+pub trait RadioHal {
+    type PacketInfo;
+    type State;
+    type Irq;
+}
+*/
 pub trait Radio<C, E>:
     Transmit<Error = E>
-    + Receive<Error = E>
+    + Receive<Info = radio_sx127x::device::PacketInfo, Error = E>
     + Power<Error = E>
     + radio::Channel<Channel = C, Error = E>
     + State<State = radio_sx127x::device::State, Error = E>
+    + Interrupts<Irq = radio_sx127x::device::Interrupts, Error = E>
     + DelayMs<u32>
     + DelayUs<u32>
 {
@@ -48,10 +69,11 @@ impl<
         C: Debug,
         E: Debug,
         T: Transmit<Error = E>
-            + Receive<Error = E>
+            + Receive<Info = radio_sx127x::device::PacketInfo, Error = E>
             + Power<Error = E>
             + radio::Channel<Channel = C, Error = E>
             + State<State = radio_sx127x::device::State, Error = E>
+            + Interrupts<Irq = radio_sx127x::device::Interrupts, Error = E>
             + DelayMs<u32>
             + DelayUs<u32>,
     > Radio<C, E> for T
@@ -72,7 +94,7 @@ where
     tx_client: Option<&'a dyn TxClient>,
     tx_buffer: Vec<LoRaMessage>,
     tx_frame: Option<frame::RadioFrameWithHeaders>,
-    rx_buffer: Option<(u8, Vec<u8>)>,
+    //rx_buffer: Option<(u8, Vec<u8>)>,
     acknowledgments: HashMap<[u8; 64], Instant>,
     address: LoRaAddress,
     phantom: PhantomData<E>,
@@ -261,6 +283,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
             Err(err) => Err(QueueError::DeviceError(err)),
         }
     }
+
     fn transmit(&mut self) -> Result<(), Self::DeviceError> {
         // Ignore if no trame is available
         if let None = self.tx_frame {
@@ -270,21 +293,10 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
         if self.is_transmitting()? {
             return Err(RadioError::BusyDevice);
         }
-        let now = Instant::now();
-        let frame = self.tx_frame.as_ref().unwrap();
+        let frame = self.tx_frame.as_ref().unwrap().clone(); // TODO: Clone avoidable...
         let nframes = frame.headers.rec_n_frames.get_frames() as usize;
-        // Checking availability of channels
-        for (i, ch) in self.channels.iter().enumerate().take(nframes) {
-            let (last_used, consumed) = self.channel_usages[i];
-            if ((last_used - now) < Duration::from_secs(ch.delay.duty_interval)
-                && consumed.as_secs_f64() / (ch.delay.duty_interval as f64) > ch.delay.duty_cycle)
-            {
-                return Err(RadioError::DutyCycleConsumed);
-            }
-            if (last_used.elapsed() < Duration::from_micros(ch.delay.min_delay)) {
-                return Err(RadioError::MinChannelDelayError);
-            }
-        }
+        // Check channel availability
+        self.transmission_check(nframes)?;
         let bytes = frame.to_bytes();
         let mut fcursor = 0;
         let mut buf = Vec::with_capacity(MAX_LORA_PAYLOAD + 1);
@@ -312,10 +324,10 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
             fcursor += 1;
             self.radio.delay_ms(400); // TODO: Adapt delay to the real ToA (from Channel info),
                                       // currently it will be always : 400ms ToA + 200ms of space.
-            while (!self
+            while !self
                 .radio
                 .check_transmit()
-                .map_err(|src| RadioError::InternalRadioError(src))?)
+                .map_err(|src| RadioError::InternalRadioError(src))?
             {
                 self.radio.delay_ms(10);
             }
@@ -328,7 +340,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
                 }
             };
             self.channel_usages[fcursor] = (last.clone(), consumed);
-            if (last.elapsed().as_millis() > 600) {
+            if last.elapsed().as_millis() > 600 {
                 return Err(RadioError::OutOfSync{ context: format!("Frame transmission + channel change should have happened in 600ms, but it is already {}ms late.", last.elapsed().as_millis()-600)});
             }
         }
@@ -339,8 +351,191 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
         Ok(())
     }
 
-    fn start_reception(&mut self) {
-        unimplemented!()
+    fn start_reception(&mut self) -> Result<(), Self::DeviceError> {
+        // Start listening on the default channel
+        self.radio
+            .set_channel(&self.channels[0].radio_channel)
+            .map_err(|src| RadioError::InternalRadioError(src))?;
+        self.radio
+            .start_receive()
+            .map_err(|src| RadioError::InternalRadioError(src))?;
+        Ok(())
+    }
+
+    fn check_reception(&mut self) -> Result<bool, Self::DeviceError> {
+        if self
+            .radio
+            .check_receive(true)
+            .map_err(|src| RadioError::InternalRadioError(src))?
+        {
+            let mut buf = [0u8; 256];
+            if let Ok((size, _packet_info)) = self.radio.get_received(&mut buf) {
+                // TODO: use the packet_info metadata like RSSI to calculate ATRP.
+                if size <= 0 {
+                    return Ok(false);
+                }
+                if buf[1] != (FrameType::Message as u8) || buf[1] != (FrameType::RelayMessage as u8)
+                {
+                    // TODO: Handle other frame types
+                    // For now, it is clearly just not a inbound message.
+                    return Ok(false);
+                }
+                let (headers, _read) = RadioHeaders::try_from_bytes(&buf[1..])
+                    .map_err(|src| RadioError::FrameError(src))?;
+                let interest = match headers.recipients {
+                    RecipientHeader::Direct(ah) if ah.get_address() == self.address => {
+                        true
+                    }
+                    RecipientHeader::Group(ahs) => {
+                        if let Some((ah, pl)) =
+                            ahs.iter().find(|(ah, pl)| ah.get_address() == self.address)
+                        {
+                            true    
+                        } else { false }
+                    }
+                    _ => {
+                        // TODO: Implement relay logic there.
+                        false
+                    }
+                }
+                if (interest) {
+                    /* TODO / WARNING (SECURITY): Note that up to this day (2022-11-13), a MITM is possible : 
+                    // somebody could listen for incoming frame, and short-circuit the emitting node
+                    // by sending following header frame, its own crafted frames (before the emitting node do so)
+                    // and take control of the payload content.
+                    // If a authenticating method (or signing method) have to be added it should be added in 
+                    // the lead frame (otherwise the attacker can craft its own signature too) */
+                    let nframes = headers.rec_n_trames.get_frames();
+                    if (nframes > 5) { return Ok(false); } // SECURITY: Do not accept arbitrary value from the outside.
+                    let mut cursor = Cursor::new(Vec::with_capacity(nframes * MAX_LORA_PAYLOAD));
+                    cursor.write_all(&mut buf[1..])?;
+                    for ch in self.channels.iter().skip(1).take(nframes) {
+                        self.radio
+                            .set_channel(&ch.radio_channel)
+                            .map_err(|src| RadioError::InternalRadioError(src))?;
+                        let mut i = 0;
+                        let mut new_frame = self.radio
+                                .check_receive(true)
+                                .map_err(|src| RadioError::InternalRadioError(src))?;
+                        while !new_frame && i < 4 {
+                            self.radio.delay_ms(50);
+                            new_frame = self.radio
+                                .check_receive(true)
+                                .map_err(|src| RadioError::InternalRadioError(src))?;
+                            i+=1;
+                        }
+                        if !new_frame {
+                            eprintln!("Silencing missing following frame.");
+                            return Ok(());
+                        }
+                        let mut buf_fp = [0u8; 256];
+                        // TODO: use the packet_info metadata like RSSI to calculate ATRP.
+                        let (size, _packet_info)) = self.radio.get_received(&mut buf_pf).map_err(|src| RadioError::InternalRadioError(src))?;
+                        cursor.write_all(buf_fp[1..])?;
+                    }
+                    self.handle_message(cursor.into_inner())?;
+                    return self.start_reception();
+                }
+            }
+        }
+        return Ok(false);
+    }
+}
+
+impl<'a, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, T, C, E> {
+    /// Transmission checks, it checks that every channel can be used and that the radio channel is not busy right now.
+    ///
+    /// Note: it only checks that the first channel is not busy, as channels, should be use in the order by protocol
+    /// assumption.
+    /// Also, radio device will change its state to CAD mode and try MAX_ATTEMPT_FREE_CHANNEL attempts to detect an
+    /// empty channel before returning an error.
+    fn transmission_check(&mut self, nframes: usize) -> Result<(), RadioError<E>> {
+        // Checking delay of channels
+        let now = Instant::now();
+        for (i, ch) in self.channels.iter().enumerate().take(nframes) {
+            let (last_used, consumed) = self.channel_usages[i];
+            if (last_used - now) < Duration::from_secs(ch.delay.duty_interval)
+                && consumed.as_secs_f64() / (ch.delay.duty_interval as f64) > ch.delay.duty_cycle
+            {
+                return Err(RadioError::DutyCycleConsumed);
+            }
+            if last_used.elapsed() < Duration::from_micros(ch.delay.min_delay) {
+                return Err(RadioError::MinChannelDelayError);
+            }
+        }
+        // Checking channels are available (well that the first one is available in reality based on protocol
+        // assumptions).
+        let mut free_channel = false;
+        let mut attemps = 0;
+        while !free_channel && attemps < MAX_ATTEMPT_FREE_CHANNEL {
+            self.radio
+                .get_interrupts(true)
+                .map_err(|err| RadioError::InternalRadioError(err))?;
+            self.radio
+                .set_state(RadioState::Cad)
+                .map_err(|err| RadioError::InternalRadioError(err))?;
+            match self
+                .radio
+                .get_interrupts(true)
+                .map_err(|err| RadioError::InternalRadioError(err))?
+            {
+                radio_sx127x::device::Interrupts::LoRa(irqs) => {
+                    free_channel = irqs.contains(radio_sx127x::device::lora::Irq::RX_TIMEOUT)
+                }
+                _ => {
+                    return Err(RadioError::Unknown {
+                        context: format!("Recieved an IRQ from an other mode than Lora!"),
+                    })
+                }
+            }
+            attemps += 1;
+            self.radio.delay_ms(100);
+        }
+        if !free_channel {
+            return Err(RadioError::BusyChannel);
+        }
+        return Ok(());
+    }
+
+    /// Once a message is fully receive in its entirety, this method is called to verify
+    /// integrity of the message and called the needed Client and send acknowledgment.
+    fn handle_message(&self, msg: Vec<u8>) -> Result<bool, RadioError<E>> {
+        // TODO: Verify integrity if implemented
+        let (frame, length) = RadioFrameWithHeaders::try_from_bytes(msg.as_slice())?;
+        if let Some(client) = self.rx_client {
+            match frame.headers.recipients {
+                RecipientHeader::Direct(_) => {
+                    for pl in frame.payloads {
+                        client.receive(frame.headers.sender.get_address(), pl);
+                        // TODO: Acknowledgment
+                    }
+                    Ok(true)
+                }
+                RecipientHeader::Group(ahs) => {
+                    if let Some((ah, pl)) =
+                        ahs.iter().find(|(ah, pl)| ah.get_address() == self.address)
+                    {
+                        let pls = pl.to_message_ids().filter_map(|id| frame.payloads.get(id)).collect();
+                        if pls.len() < frame.headers.payloads {
+                            warn!("Badly formatted frame: missing message.");
+                            // TODO: Acknowledgment
+                        }
+                        for pl in pls {
+                            client.receive(frame.headers.sender.get_address(), pl);
+                        } 
+                        Ok(true)    
+                    } else {
+                        Ok(false)
+                    }
+                }
+                _ => {
+                    unreacheable!();
+                    Ok(false)
+                }
+            }
+        } else {
+            return Ok(false)
+        }
     }
 }
 
@@ -370,6 +565,9 @@ where
 
     #[error("Busy device.")]
     BusyDevice,
+
+    #[error("Busy channel")]
+    BusyChannel,
 
     #[error("One or more channel has consumed all of their dutycycle. Need to wait...")]
     DutyCycleConsumed,
