@@ -15,6 +15,9 @@ pub trait FrameSize {
     fn size(&self) -> usize;
 }
 
+pub type FrameNonce = u64;
+const FRAME_NONCE_SIZE : usize = 8;
+
 /// Radio header representation.
 #[derive(Clone, Debug)]
 pub struct RadioHeaders {
@@ -27,7 +30,12 @@ pub struct RadioHeaders {
     /// Sender address
     pub sender: AddressHeader,
     //stats: (),
-    pub nonce: u16,
+    /// TODO / PROPOSAL / SECURITY : use timestamp + 16 random bits
+    /// 
+    /// Nonce MUST follow a total order.
+    pub nonce: FrameNonce,
+    // TODO / PROPOSAL / SECURITY : add frame signature (64 bytes for Ed25519)
+    // pub signature: [u8; 64];
 }
 
 /// Full representation of a Radio frame with headers and payloads.
@@ -67,33 +75,33 @@ pub(crate) type Payload = Vec<u8>;
 impl InfoHeader {
     pub fn new(recipients: u8, frames: u8) -> Self {
         let mut inner = 0u8;
-        inner += (recipients << 4) | 0xF0;
-        inner += frames | 0x0F;
+        inner += (recipients << 4) & 0b11110000;
+        inner += frames & 0b00001111;
         return InfoHeader(inner);
     }
 
     pub fn set_recipients(&mut self, recipients: u8) -> Self {
         let mut inner = 0u8;
-        inner += (recipients << 4) | 0xF0;
-        inner += self.0 | 0x0F;
+        inner += (recipients << 4) & 0b11110000;
+        inner += self.0 & 0b00001111;
         self.0 = inner;
         *self
     }
 
     pub fn set_frames(&mut self, frames: u8) -> Self {
         let mut inner = 0u8;
-        inner += self.0 | 0xF0;
-        inner += frames | 0x0F;
+        inner += self.0 & 0b11110000;
+        inner += frames & 0b00001111;
         self.0 = inner;
         *self
     }
 
     pub fn get_recipients(&self) -> u8 {
-        ((self.0) >> 4) | 0x0F
+        ((self.0) >> 4) & 0b00001111
     }
 
     pub fn get_frames(&self) -> u8 {
-        self.0 | 0x0F
+        self.0 & 0b00001111
     }
 }
 
@@ -171,7 +179,7 @@ impl PayloadFlag {
     pub fn to_message_ids(&self) -> Vec<u8> {
         let mut ids = Vec::new();
         for i in 0..16 {
-            if ((self.0 >> i) | 1) == 1 {
+            if ((self.0 >> i) & 1) == 1 {
                 ids.push(i);
             }
         }
@@ -296,7 +304,7 @@ impl RadioHeaders {
         let src_raw: u16 = self.sender.into();
         bytes.append(&mut src_raw.to_be_bytes().to_vec());
         bytes.push(self.payloads.to_be());
-        let nonce_raw: u16 = self.nonce.into();
+        let nonce_raw: u64 = self.nonce.into();
         bytes.append(&mut nonce_raw.to_be_bytes().to_vec());
         bytes
     }
@@ -325,9 +333,11 @@ impl RadioHeaders {
             });
         };
         let payloads = u8::from_be(bytes[read + 3]);
-        let mut nonce_raw = [0u8; 2];
-        let nonce = u16::from_be_bytes(nonce_raw);
-        if bytes.len() < read + 6 {
+        
+        let mut nonce_raw = [0u8; FRAME_NONCE_SIZE];
+        nonce_raw.copy_from_slice(&bytes[(read + 3)..(read + 3 + FRAME_NONCE_SIZE)]);
+        let nonce = u64::from_be_bytes(nonce_raw);
+        if bytes.len() < read + 8 {
             return Err(FrameError::InvalidHeader {
                 context: Some(format!("Badly formatted frame, missing nonce!")),
             });
@@ -340,7 +350,7 @@ impl RadioHeaders {
                 sender,
                 nonce,
             },
-            read + 6,
+            read + 8,
         ))
     }
 }
@@ -363,7 +373,7 @@ impl RadioFrameWithHeaders {
         let (headers, read) = RadioHeaders::try_from_bytes(bytes)?;
         let mut cursor = read + 1;
         let mut payloads = Vec::new();
-        for i in 0..(headers.payloads as usize) {
+        for _i in 0..(headers.payloads as usize) {
             if bytes.len() < cursor {
                 return Err(FrameError::InvalidHeader {
                     context: Some(format!("Fail to read payload length at byte {}!", cursor)),
@@ -445,7 +455,7 @@ impl FrameSize for RadioHeaders {
             + self.recipients.size()
             + self.payloads.size()
             + self.sender.size()
-            + self.nonce.size()
+            + FRAME_NONCE_SIZE
     }
 }
 

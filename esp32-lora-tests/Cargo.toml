@@ -8,10 +8,10 @@ edition = "2021"
 pio = ["esp-idf-sys/pio"]
 
 [dependencies]
-esp-idf-sys = { version = "0.31.5", features = ["binstart"] }
-embedded-svc = "0.21.1"
+esp-idf-sys = { version = "0.32", features = ["binstart"] }
+embedded-svc = "0.24"
 #esp-idf-svc = "0.41.2"
-esp-idf-hal = "0.37.3"
+esp-idf-hal = "0.40"
 embedded-hal = "0.2"
 anyhow = "1"
 radio = "0.11.0"

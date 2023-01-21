@@ -4,8 +4,9 @@ use anyhow::{anyhow, Result};
 use esp_idf_hal::delay;
 use esp_idf_hal::prelude::*;
 //use embedded_hal::blocking::delay::{DelayMs, DelayUs};
-use esp_idf_hal::gpio::{InputPin as GpioInputPin, OutputPin as GpioOutputPin};
-use esp_idf_hal::spi::{self, Spi};
+use esp_idf_hal::gpio::{AnyIOPin, InputPin as GpioInputPin, OutputPin as GpioOutputPin, PinDriver};
+use esp_idf_hal::spi::{self, SPI2, Dma, SpiDriver, SpiDeviceDriver};
+use esp_idf_hal::spi::config::{Config as SpiConfig};
 use esp_idf_hal::units::{KiloHertz, MegaHertz};
 
 use embedded_hal::blocking::delay::DelayMs;
@@ -42,12 +43,20 @@ fn main() -> Result<()> {
     #[allow(unused)]
     let pins = peripherals.pins;
 
-    // Should use the associated LORA_SPI.
-    let spi = setup_lora_spi(peripherals.spi2, pins.gpio19, pins.gpio18, pins.gpio5)?;
+    /* SPI Pinout
+     * SCK :        05
+     * MISO :       18
+     * MOSI :       19
+     * NSS / nCS:   17
+     * RESET:       16
+     */
+    let driver = SpiDriver::new::<SPI2>(peripherals.spi2, pins.gpio5, pins.gpio18, Some(pins.gpio19), Dma::Disabled)?;
+    let config = SpiConfig::new().baudrate(LORA_SPI_FREQUENCY.into());
+    let mut device = SpiDeviceDriver::new(&driver, None as Option<AnyIOPin>, &config)?;
     let mut lora = setup_lora(
-        spi,
-        pins.gpio17.into_output()?,
-        pins.gpio16.into_input_output()?,
+        device,
+        PinDriver::input_output(pins.gpio17)?.into_output()?,
+        PinDriver::input_output(pins.gpio16)?.into_input_output()?,
     )?;
 
     println!("LoRa radio is ready.");
@@ -82,27 +91,6 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn setup_lora_spi<Miso: GpioOutputPin, Mosi: GpioInputPin + GpioOutputPin, Sck: GpioOutputPin>(
-    spi_device: LoraSpi,
-    mosi: Mosi,
-    miso: Miso,
-    sck: Sck,
-) -> Result<spi::Master<LoraSpi, Sck, Miso, Mosi>> {
-    let config = <spi::config::Config as Default>::default().baudrate(LORA_SPI_FREQUENCY.into());
-    let spi = spi::Master::<LoraSpi, _, _, _, _>::new(
-        spi_device,
-        spi::Pins {
-            sclk: sck,
-            sdo: miso,
-            sdi: Some(mosi),
-            cs: None,
-        },
-        config,
-    )?;
-
-    Ok(spi)
-}
-
 fn setup_lora<
     E: Debug + 'static,
     E2: Debug + 'static,
@@ -114,14 +102,6 @@ fn setup_lora<
     nss: Nss,
     reset: Reset,
 ) -> Result<Sx127xSpi<S, Nss, Reset, delay::Ets>> {
-    //let base = Base{spi, nss, reset, delay::Ets};
-    //let mut lora = radio_sx127x::Sx127x<
-    //    Base<S, Nss, Reset, EtsDelay>
-    //>::new(base, config).map_err(|err| {anyhow!("Lora radio setup failed!\ncause: {:?}", err)})?;
-    //lora.clear_irq().map_err(|_| {anyhow!("IRQ clear failed!")})?;
-    //lora.set_tx_power(10, 0).map_err(|_| {anyhow!("TX power setup failed!")})?; // Default 10dBm / 10mW on normal amplification circuit (0-14dBm circuit)
-    //let _ = lora.get_interrupts(true).map_err(|_| {anyhow!("IRQ clear failed!")})?;
-    //lora.set_power(10);
     let channel = Channel::LoRa(LoRaChannel {
         freq: LORA_FREQUENCIES[0].into(),
         sf: SpreadingFactor::Sf9,

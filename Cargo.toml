@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "esp32-lora-tests",
+    "esp32-tipe-client",
     "radio-tipe-poc",
 ]
 
