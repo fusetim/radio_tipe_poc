@@ -145,9 +145,7 @@ impl AddressHeader {
     }
 
     pub fn set_global(&mut self) -> Self {
-        self.0 &= ACKNOWLEDGMENT_BITMASK;
-        self.0 += GLOBAL_NO_ACKNOWLEDGMENT;
-        *self
+        self.set_address(GLOBAL_NO_ACKNOWLEDGMENT)
     }
 
     pub fn get_acknowledgment(&self) -> bool {
@@ -164,17 +162,17 @@ impl AddressHeader {
 }
 
 impl PayloadFlag {
-    /// Message ID should be included in 0..16 (16 excluded), and unique in the slice.
+    /// Message ID should be included in 0..16 (16 excluded) in the slice.
     pub fn new(message_ids: &[u8]) -> Self {
         let mut inner = 0u16;
         for id in message_ids {
-            inner += 1 << (id);
+            inner |= 1 << (id);
         }
         Self(inner)
     }
 
     pub fn push(&mut self, id: u8) {
-        self.0 |= 1 << (id - 1);
+        self.0 |= 1 << id;
     }
 
     pub fn to_message_ids(&self) -> Vec<u8> {
@@ -477,5 +475,173 @@ impl FrameSize for RecipientHeader {
                 .into_iter()
                 .fold(0, |acc, (addr, pf)| acc + addr.size() + pf.size()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_encode_info_header() {
+        let ih1 = InfoHeader::new(0, 0);
+        assert!(ih1.0 == 0b0000_0000, "Failed to initialize an empty InfoHeader, got: {:b}, expect {:b}", ih1.0, 0b0000_0000);
+
+        let ih2 = InfoHeader::new(15, 0);
+        assert!(ih2.0 == 0b1111_0000, "Failed to initialize an InfoHeader with 15 recipients, got: {:b}, expect {:b}", ih2.0, 0b1111_0000);
+
+        let ih3 = InfoHeader::new(0,5);
+        assert!(ih3.0 == 0b0000_0101, "Failed to initialize an InfoHeader with 5 frames, got: {:b}, expect {:b}", ih3.0, 0b0000_0101);
+
+        let ih4 = InfoHeader::new(12, 3);
+        assert!(ih4.0 == 0b1100_0011, "Failed to initialize an InfoHeader with 12 recipients and 3 frames, got: {:b}, expect {:b}", ih4.0, 0b1100_0011);
+
+        let mut ih5 = ih1.clone();
+        ih5.set_recipients(12);
+        assert!(ih5.0 == 0b1100_0000, "Failed to edit an InfoHeader to 12 recipients, got: {:b}, expect {:b}", ih5.0, 0b1100_0000);
+        ih5.set_frames(3);
+        assert!(ih5.0 == 0b1100_0011, "Failed to edit an InfoHeader to 12 recipients and 3 frames, got: {:b}, expect {:b}", ih5.0, 0b1100_0011);
+        ih5.set_recipients(0);
+        assert!(ih5.0 == 0b0000_0011, "Failed to edit an InfoHeader to 0 recipients and 3 frames, got: {:b}, expect {:b}", ih5.0, 0b0000_0011);
+    }
+
+    #[test]
+    fn frame_encode_global_address_header() {
+        let ah1 = AddressHeader::new_global(true);
+        assert_eq!(ah1.0, GLOBAL_ACKNOWLEDGMENT);
+        let ah2 = AddressHeader::new_global(false);
+        assert_eq!(ah2.0, GLOBAL_NO_ACKNOWLEDGMENT);
+        assert!(ah1.is_global(), "ah1 is not recognized as a global address!");
+        assert!(ah2.is_global(), "ah2 is not recognized as a global address!");
+
+        assert!(ah1.get_acknowledgment(), "ah1 do not require acknowledgment while it does.");
+        assert!(!ah2.get_acknowledgment(), "ah2 requires an acknowledgment while it does not!");
+    }
+
+    #[test]
+    fn frame_encode_address_header() {
+        let ah1 = AddressHeader::new(0b0011111111111111, false);
+        let ah2 = AddressHeader::new(0b1011111111111111, false);
+        let ah3 = AddressHeader::new(0b0011111111111111, true);
+        assert_eq!(ah1.0, ah2.0, "AddressHeader should ignore acknowledgment flag on build!");
+        
+        assert!(!ah1.is_global(), "ah1 is recognized as a global address!");
+        assert!(!ah2.is_global(), "ah2 is recognized as a global address!");
+        assert!(!ah3.is_global(), "ah3 is recognized as a global address!");
+
+        assert!(!ah2.get_acknowledgment(), "ah2 requires an acknowledgment while it does not!");
+        assert!(ah3.get_acknowledgment(), "ah3 do not require acknowledgment while it does.");
+    }
+
+    #[test]
+    fn frame_accessor_address_header() {
+        let ah1 = AddressHeader::new(0b0011111111111111, false);
+        let ah2 = AddressHeader::new(0b0011111111111111, true);      
+        let ah3 = AddressHeader::new(0b0000000000000000, false);
+        let ah4 = AddressHeader::new(0b0000000000000000, true);      
+        let ahg1 = AddressHeader::new_global(false);
+        let ahg2 = AddressHeader::new_global(true);        
+
+        // is_global
+        assert!(!ah1.is_global(), "ah1 is not a global address!");
+        assert!(!ah2.is_global(), "ah2 is not a global address!");
+        assert!(!ah3.is_global(), "ah3 is not a global address!");
+        assert!(!ah4.is_global(), "ah4 is not a global address!");
+        assert!(ahg1.is_global(), "ahg1 is a global address!");
+        assert!(ahg1.is_global(), "ahg2 is a global address!");
+
+        // get_acknowledgment
+        assert!(!ah1.get_acknowledgment(), "ah1 does not require an acknowledgment!");
+        assert!(!ah3.get_acknowledgment(), "ah3 does not require an acknowledgment!");
+        assert!(!ahg1.get_acknowledgment(), "ahg1 does not require an acknowledgment!");
+        assert!(ah2.get_acknowledgment(),   "ah2 requires an acknowledgment!");
+        assert!(ah4.get_acknowledgment(),   "ah4 requires an acknowledgment!");
+        assert!(ahg2.get_acknowledgment(), "ahg2 requires an acknowledgment!");
+
+        // get_address
+        assert!(ah1.get_address() == 0b0011111111111111, "ah1.get_address() returned {}, expected {}!", ah1.get_address(), 0b0011111111111111);
+        assert!(ah2.get_address() == 0b0011111111111111, "ah2.get_address() returned {}, expected {}!", ah2.get_address(), 0b0011111111111111);
+        assert!(ah3.get_address() == 0b0000000000000000, "ah2.get_address() returned {}, expected {}!", ah3.get_address(), 0b0000000000000000);
+        assert!(ah4.get_address() == 0b0000000000000000, "ah4.get_address() returned {}, expected {}!", ah4.get_address(), 0b0000000000000000);
+        assert!(ahg1.get_address() == GLOBAL_NO_ACKNOWLEDGMENT, "ahg1.get_address() returned {}, expected {}!", ahg1.get_address(), GLOBAL_NO_ACKNOWLEDGMENT);
+        assert!(ahg2.get_address() == GLOBAL_NO_ACKNOWLEDGMENT, "ahg2.get_address() returned {}, expected {}!", ahg2.get_address(), GLOBAL_NO_ACKNOWLEDGMENT);
+    }
+
+    #[test]
+    fn frame_modifier_address_header() {
+        let mut ah1 = AddressHeader::new(0b0000000000000000, false);
+        let mut ah2 = AddressHeader::new(0b0000000000000000, true);      
+        let mut ahg1 = AddressHeader::new_global(false);
+        let mut ahg2 = AddressHeader::new_global(true); 
+        
+        // set_acknowledgment 
+        ah1.set_acknowledgment(true);
+        assert_eq!(ah1.0, ah2.0, "ah1.set_acknowledgment(true)");
+        ah1.set_acknowledgment(false);
+        assert_eq!(ah1.0, 0b0000000000000000, "ah1.set_acknowledgment(false)");
+        ahg1.set_acknowledgment(true);
+        assert_eq!(ahg1.0, ahg2.0, "ahg1.set_acknowledgment(true)");
+        ahg1.set_acknowledgment(false);
+        assert_eq!(ahg1.0, GLOBAL_NO_ACKNOWLEDGMENT, "ahg1.set_acknowledgment(false)");
+
+        // set_address
+        let mut ah1 = AddressHeader::new(0b0000000000000000, false);
+        ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT);
+        assert_eq!(ah1.0, GLOBAL_NO_ACKNOWLEDGMENT, "ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT)");
+        ah1.set_address(GLOBAL_ACKNOWLEDGMENT);
+        assert_eq!(ah1.0, GLOBAL_NO_ACKNOWLEDGMENT, "ah1.set_address(GLOBAL_ACKNOWLEDGMENT) should ignore the acknowledgment!");
+        ah1.set_acknowledgment(true);
+        ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT);
+        assert_eq!(ah1.0, GLOBAL_ACKNOWLEDGMENT, "ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT) should ignore the acknowledgment!");
+        ah1.set_address(0b0000000000000000);
+        assert_eq!(ah1.0, 0b1000000000000000, "ah1.set_address(0b0000000000000000) should ignore the acknowledgment!");
+    }
+
+    #[test]
+    fn frame_encode_payload_flag() {
+        let pf1 = PayloadFlag::new(&[1,4,6,9,15]);
+        assert_eq!(pf1.0, 0b1000_0010_0101_0010);
+        let pf2 = PayloadFlag::new(&[3,5,8,12,13]);
+        assert_eq!(pf2.0, 0b0011_0001_0010_1000);
+        let pf3 = PayloadFlag::new(&[2,7,10,11,14]);
+        assert_eq!(pf3.0, 0b0100_1100_1000_0100);
+        let pf4 = PayloadFlag::new(&[14,11,10,7,2]);
+        assert_eq!(pf4.0, 0b0100_1100_1000_0100);
+        let mut pf5 = PayloadFlag::new(&[14,11,10,7,2]);
+        pf5.push(3);
+        pf5.push(5);
+        pf5.push(12);
+        pf5.push(13);
+        pf5.push(8);
+        assert_eq!(pf5.0, 0b0111_1101_1010_1100);
+    }
+
+    #[test]
+    fn frame_decode_payload_flag() {
+        let pf1 = PayloadFlag::new(&[1,4,6,9,15]);
+        let pf2 = PayloadFlag::new(&[3,5,8,12,13]);
+        let pf3 = PayloadFlag::new(&[2,7,10,11,14]);
+        let pf4 = PayloadFlag::new(&[14,11,10,7,2]);
+
+        // TO CONTINUE!
+    }
+
+    #[test]
+    fn frame_decode_info_header() {
+        let ih1 = InfoHeader::new(0, 0);
+        assert!(ih1.get_recipients() == 0, "ih1::get_recipients() returned {} recipients while {} was expected!", ih1.get_recipients(), 0);
+        assert!(ih1.get_frames() == 0, "ih1::get_frames() returned {} frames while {} was expected!", ih1.get_frames(), 0);
+
+        let ih2 = InfoHeader::new(15, 0);
+        assert!(ih2.get_recipients() == 15, "ih2::get_recipients() returned {} recipients while {} was expected!", ih2.get_recipients(), 15);
+        assert!(ih2.get_frames() == 0, "ih2::get_frames() returned {} frames while {} was expected!", ih2.get_frames(), 0);
+
+        let ih3 = InfoHeader::new(0,5);
+        assert!(ih3.get_recipients() == 0, "ih3::get_recipients() returned {} recipients while {} was expected!", ih3.get_recipients(), 0);
+        assert!(ih3.get_frames() == 5, "ih3::get_frames() returned {} frames while {} was expected!", ih3.get_frames(), 5);
+
+        let ih4 = InfoHeader::new(12, 3);
+        assert!(ih4.get_recipients() == 12, "ih4::get_recipients() returned {} recipients while {} was expected!", ih4.get_recipients(), 12);
+        assert!(ih4.get_frames() == 3, "ih4::get_frames() returned {} frames while {} was expected!", ih4.get_frames(), 3);
     }
 }
