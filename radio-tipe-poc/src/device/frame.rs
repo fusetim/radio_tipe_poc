@@ -230,12 +230,12 @@ impl<'a> RecipientHeader {
         let mut bytes = Vec::new();
         match self {
             RecipientHeader::Direct(addr) => {
-                bytes.push(1);
+                bytes.push(1_u8.to_be());
                 let addr_raw: u16 = (*addr).into();
                 bytes.append(&mut addr_raw.to_be_bytes().to_vec());
             }
             RecipientHeader::Group(addrs) => {
-                bytes.push(addrs.len() as u8);
+                bytes.push((addrs.len() as u8).to_be());
                 for (a, pf) in addrs {
                     let a_raw: u16 = (*a).into();
                     let pf_raw: u16 = (*pf).into();
@@ -252,7 +252,8 @@ impl<'a> RecipientHeader {
                 context: Some(format!("Recipient header is too small (0 byte).")),
             });
         };
-        match bytes[0] {
+        let nrec = u8::from_be(bytes[0]);
+        match nrec {
             0 => Err(FrameError::InvalidHeader {
                 context: Some(format!("Recipient header with 0 recipient.")),
             }),
@@ -268,18 +269,18 @@ impl<'a> RecipientHeader {
                 Ok((RecipientHeader::Direct(addr), 3))
             }
             2..=16 => {
-                if bytes.len() < 1 + 4 * bytes[0] as usize {
+                if bytes.len() < 1 + 4 * nrec as usize {
                     return Err(FrameError::InvalidHeader{ context: Some(format!("Recipient header is too small for a Group trame ({} recipients and only {} bytes).", bytes[0], bytes.len()))});
                 };
                 let mut addrs = Vec::new();
-                for i in 0..(bytes[0] as usize) {
+                for i in 0..(nrec as usize) {
                     let mut addr_raw = [0u8; 2];
                     addr_raw
                         .copy_from_slice(&bytes[((1 + i * 4) as usize)..((3 + i * 4) as usize)]);
                     let addr = AddressHeader::from(u16::from_be_bytes(addr_raw));
                     let mut pf_raw = [0u8; 2];
                     pf_raw.copy_from_slice(&bytes[((3 + i * 4) as usize)..((5 + i * 4) as usize)]);
-                    let pf = PayloadFlag::from(u16::from_be_bytes(addr_raw));
+                    let pf = PayloadFlag::from(u16::from_be_bytes(pf_raw));
                     addrs.push((addr, pf));
                 }
                 Ok((
@@ -618,12 +619,22 @@ mod tests {
 
     #[test]
     fn frame_decode_payload_flag() {
-        let pf1 = PayloadFlag::new(&[1,4,6,9,15]);
+        let pf1 = PayloadFlag::new(&[0,1,4,6,9,15]);
         let pf2 = PayloadFlag::new(&[3,5,8,12,13]);
         let pf3 = PayloadFlag::new(&[2,7,10,11,14]);
         let pf4 = PayloadFlag::new(&[14,11,10,7,2]);
-
-        // TO CONTINUE!
+        
+        for k in 0..16 {
+            match k {
+                0 | 1 | 4 | 6 | 9 | 15 => assert!(pf1.to_message_ids().contains(&k)),
+                3 | 5 | 8 | 12 | 13 => assert!(pf2.to_message_ids().contains(&k)),
+                2 | 7 | 10 | 11 | 14 => {
+                    assert!(pf3.to_message_ids().contains(&k));
+                    assert!(pf4.to_message_ids().contains(&k));
+                },
+                _ => {unreachable!()},
+            }
+        }
     }
 
     #[test]
@@ -643,5 +654,92 @@ mod tests {
         let ih4 = InfoHeader::new(12, 3);
         assert!(ih4.get_recipients() == 12, "ih4::get_recipients() returned {} recipients while {} was expected!", ih4.get_recipients(), 12);
         assert!(ih4.get_frames() == 3, "ih4::get_frames() returned {} frames while {} was expected!", ih4.get_frames(), 3);
+    }
+
+    #[test]
+    fn frame_encode_simple_recipient_header() {
+        let ah1 = AddressHeader::new(0b00000000_00000001, false);
+        let rh1 = RecipientHeader::Direct(ah1);
+        let rhb1 = rh1.to_bytes();
+        assert_eq!(rhb1[0], 0b0000_0001); // 1 recipient
+        assert_eq!(rhb1[1], 0b0000_0000); // start of ah1
+        assert_eq!(rhb1[2], 0b0000_0001); // end of ah1
+
+        let ah2 = AddressHeader::new(0b00000000_00000001, true);
+        let rh2 = RecipientHeader::Direct(ah2);
+        let rhb2 = rh2.to_bytes();
+        assert_eq!(rhb2[0], 0b0000_0001); // 1 recipient
+        assert_eq!(rhb2[1], 0b1000_0000); // start of ah2
+        assert_eq!(rhb2[2], 0b0000_0001); // end of ah2
+
+        let ahg1 = AddressHeader::new_global(true);
+        let rhg1 = RecipientHeader::Direct(ahg1);
+        let rhgb1 = rhg1.to_bytes();
+        assert_eq!(rhgb1[0], 0b0000_0001); // 1 recipient
+        assert_eq!(rhgb1[1], 0b1111_1111); // start of ahg1
+        assert_eq!(rhgb1[2], 0b1111_1111); // end of ahg1
+    }
+
+    #[test]
+    fn frame_decode_simple_recipient_header() {
+        let ah1 = AddressHeader::new(0b00000000_00000001, false);
+        let rh1 = RecipientHeader::Direct(ah1);
+        let rhb1 = rh1.to_bytes();
+
+        let (rhd1, _) = RecipientHeader::try_from_bytes(&rhb1).expect("rhd1 failed parsing!");
+        match rhd1 {
+            RecipientHeader::Direct(ahd1) => assert_eq!(ahd1, ah1),
+            _ => panic!("RecipientHeader is not direct, got : {:?}", rhd1),
+        }
+    }
+
+    #[test]
+    fn frame_decode_group_recipient_header() {
+        let ah1 = AddressHeader::new(0b00000000_00000001, false);
+        let ah2 = AddressHeader::new(0b00000000_00000010, true);
+        let ah3 = AddressHeader::new_global(true);
+        let ph1 = PayloadFlag::new(&[0,2]);
+        let ph2 = PayloadFlag::new(&[1,3]);
+        let ph3 = PayloadFlag::new(&[15,13]);
+        let rh1 = RecipientHeader::Group(vec!((ah1,ph1), (ah2, ph2), (ah3, ph3)));
+        let rhb1 = rh1.to_bytes();
+
+        let (rhd1, _) = RecipientHeader::try_from_bytes(&rhb1).expect("rhd1 failed parsing!");
+        match rhd1 {
+            RecipientHeader::Group(recs) => {
+                assert_eq!(recs[0].0, ah1);
+                assert_eq!(recs[1].0, ah2);
+                assert_eq!(recs[2].0, ah3);
+                assert_eq!(recs[0].1, ph1, "got {:b}", recs[0].1.0);
+                assert_eq!(recs[1].1, ph2, "got {:b}", recs[1].1.0);
+                assert_eq!(recs[2].1, ph3, "got {:b}", recs[2].1.0);
+            }
+            _ => panic!("RecipientHeader is not group, got : {:?}", rhd1),
+        }
+    }
+
+    #[test]
+    fn frame_encode_group_recipient_header() {
+        let ah1 = AddressHeader::new(0b00000000_00000001, false);
+        let ah2 = AddressHeader::new(0b00000000_00000010, true);
+        let ah3 = AddressHeader::new_global(true);
+        let ph1 = PayloadFlag::new(&[0,2]);
+        let ph2 = PayloadFlag::new(&[1,3]);
+        let ph3 = PayloadFlag::new(&[15,13]);
+        let rh1 = RecipientHeader::Group(vec!((ah1,ph1), (ah2, ph2), (ah3, ph3)));
+        let rhb1 = rh1.to_bytes();
+        assert_eq!(rhb1[00], 0b0000_0011); // 3 recipient
+        assert_eq!(rhb1[01], 0b0000_0000); // start of ah1
+        assert_eq!(rhb1[02], 0b0000_0001); // end of   ah1
+        assert_eq!(rhb1[03], 0b0000_0000); // start of ph1
+        assert_eq!(rhb1[04], 0b0000_0101); // end of   ph1
+        assert_eq!(rhb1[05], 0b1000_0000); // start of ah2
+        assert_eq!(rhb1[06], 0b0000_0010); // end of   ah2
+        assert_eq!(rhb1[07], 0b0000_0000); // start of ph2
+        assert_eq!(rhb1[08], 0b0000_1010); // end of   ph2
+        assert_eq!(rhb1[09], 0b1111_1111); // start of ah3
+        assert_eq!(rhb1[10], 0b1111_1111); // end of   ah3
+        assert_eq!(rhb1[11], 0b1010_0000); // start of ph3
+        assert_eq!(rhb1[12], 0b0000_0000); // end of   ph3
     }
 }
