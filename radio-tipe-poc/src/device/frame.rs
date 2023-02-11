@@ -1,3 +1,4 @@
+
 pub enum FrameType {
     Message = 0,
     Acknowledgment = 1,
@@ -179,7 +180,10 @@ impl PayloadFlag {
     pub fn to_message_ids(&self) -> Vec<u8> {
         let mut ids = Vec::new();
         for i in 0..16 {
-            if ((self.0 >> i) & 1) == 1 {
+            /*if ((self.0 >> i) & 1) == 1 {
+                ids.push(i);
+            }*/
+            if ((self.0 & (1 << i)) > 0) {
                 ids.push(i);
             }
         }
@@ -335,7 +339,7 @@ impl RadioHeaders {
         let payloads = u8::from_be(bytes[read + 3]);
         
         let mut nonce_raw = [0u8; FRAME_NONCE_SIZE];
-        nonce_raw.copy_from_slice(&bytes[(read + 3)..(read + 3 + FRAME_NONCE_SIZE)]);
+        nonce_raw.copy_from_slice(&bytes[(read + 4)..(read + 4 + FRAME_NONCE_SIZE)]);
         let nonce = u64::from_be_bytes(nonce_raw);
         if bytes.len() < read + 8 {
             return Err(FrameError::InvalidHeader {
@@ -371,7 +375,7 @@ impl RadioFrameWithHeaders {
 
     pub fn try_from_bytes<'a>(bytes: &'a [u8]) -> Result<(Self, usize), FrameError> {
         let (headers, read) = RadioHeaders::try_from_bytes(bytes)?;
-        let mut cursor = read + 1;
+        let mut cursor = read;
         let mut payloads = Vec::new();
         for _i in 0..(headers.payloads as usize) {
             if bytes.len() < cursor {
@@ -387,11 +391,11 @@ impl RadioFrameWithHeaders {
                     context: Some(format!("Fail to read payload at byte {}!", cursor + len)),
                 });
             };
-            let payload: Vec<u8> = bytes[(cursor + 1)..(cursor + 1 + len)]
+            let payload: Vec<u8> = bytes[(cursor + 2)..(cursor + 2 + len)]
                 .iter()
                 .map(|b| u8::from_be(*b))
                 .collect();
-            cursor = cursor + 1 + len;
+            cursor = cursor + 2 + len;
             payloads.push(payload);
         }
         Ok((RadioFrameWithHeaders { headers, payloads }, cursor))

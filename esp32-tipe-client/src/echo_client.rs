@@ -30,13 +30,14 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
 
     pub fn spawn(&'a mut self) -> anyhow::Result<()> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(30);
-        let handler = ProtocolHandler {
+        let mut handler = ProtocolHandler {
             sender,       
         };
         {
             self.device.start_reception()?;
             use std::sync::mpsc::RecvTimeoutError;
  
+            // TODO : self.device.set_receive_client(&mut handler);
             let mut send_instant = Instant::now();
 
             loop {
@@ -103,13 +104,13 @@ struct ProtocolHandler {
 }
 
 impl TxClient for ProtocolHandler {
-    fn send_done(&mut self, nonce: FrameNonce) -> Result<(), ()> {
+    fn send_done(&self, nonce: FrameNonce) -> Result<(), ()> {
         self.sender.try_send(ProtocolMessage::TransmissionDone(nonce)).map_err(|_| ())
     }
 }
 
 impl RxClient for ProtocolHandler {
-    fn receive(&mut self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce) -> Result<(), ()> {
+    fn receive(&self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce) -> Result<(), ()> {
         self.sender.try_send(ProtocolMessage::RecievedMessage(sender, payload, nonce)).map_err(|_| ())
     }
 }

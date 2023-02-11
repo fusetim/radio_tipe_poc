@@ -21,6 +21,7 @@ radio-tipe-poc = { path = "../radio-tipe-poc" }
 log = "*"
 esp_idf_logger = "0.1.1"
 #chrono = {version = "0.3.0"}
+esp-backtrace = { version = "0.5", features = ["esp32", "panic-handler", "exception-handler", "print-uart"]}
 
 [build-dependencies]
 embuild = "0.30"

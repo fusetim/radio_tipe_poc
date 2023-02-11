@@ -94,8 +94,8 @@ where
     radio: T,
     channels: &'a [Channel<C>],
     channel_usages: Vec<(Instant, Duration)>,
-    rx_client: Option<&'a mut dyn RxClient>,
-    tx_client: Option<&'a mut dyn TxClient>,
+    rx_client: Option<Box<dyn RxClient>>,
+    tx_client: Option<Box<dyn TxClient>>,
     tx_buffer: Vec<LoRaMessage>,
     tx_frame: Option<frame::RadioFrameWithHeaders>,
     //rx_buffer: Option<(u8, Vec<u8>)>,
@@ -114,8 +114,8 @@ where
     pub fn new(
         radio: T,
         channels: &'a [Channel<C>],
-        rx_client: Option<&'a mut dyn RxClient>,
-        tx_client: Option<&'a mut dyn TxClient>,
+        rx_client: Option<Box<dyn RxClient>>,
+        tx_client: Option<Box<dyn TxClient>>,
         address: LoRaAddress,
     ) -> Self {
         assert!(channels.len() > 0, "No channel declared!");
@@ -200,10 +200,10 @@ where
 
 impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, E> {
     type DeviceError = RadioError<E>;
-    fn set_transmit_client(&mut self, client: &'a mut dyn TxClient) {
+    fn set_transmit_client(&mut self, client: Box<dyn TxClient>) {
         self.tx_client = Some(client);
     }
-    fn set_receive_client(&mut self, client: &'a mut dyn RxClient) {
+    fn set_receive_client(&mut self, client: Box<dyn RxClient>) {
         self.rx_client = Some(client);
     }
     fn set_address(&mut self, address: LoRaAddress) {
@@ -313,8 +313,12 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
                 .set_channel(&ch.radio_channel)
                 .map_err(|src| RadioError::InternalRadioError(src))?;
             buf.push((FrameType::Message as u8).to_be());
+            let mut end = (fcursor + 1) * MAX_LORA_PAYLOAD;
+            if end > bytes.len() {
+                end = bytes.len();
+            }
             buf.extend_from_slice(
-                &bytes[fcursor * MAX_LORA_PAYLOAD..(fcursor + 1) * MAX_LORA_PAYLOAD],
+                &bytes[fcursor * MAX_LORA_PAYLOAD..end],
             );
             if fcursor > 0 {
                 // Wait the 600ms period.
@@ -355,7 +359,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
         }
         println!("Clearing queue, acknowledging the transmission to API client");
         self.tx_frame = None;
-        if let Some(client) = &mut self.tx_client {
+        if let Some(client) = &self.tx_client {
             client.send_done(nonce); // TODO: Error silenced here!
         }
         Ok(nonce)
@@ -387,7 +391,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
                     info!("Packet ignored: size <= 0");
                     return Ok(false);
                 }
-                if buf[0] != (FrameType::Message as u8) || buf[0] != (FrameType::RelayMessage as u8)
+                if buf[0] != (FrameType::Message as u8) && buf[0] != (FrameType::RelayMessage as u8)
                 {
                     // TODO: Handle other frame types
                     // For now, it is ignored as not a inbound message.
@@ -422,10 +426,13 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
                     // If a authenticating method (or signing method) have to be added it should be added in 
                     // the lead frame (otherwise the attacker can craft its own signature too) */
                     let nframes = headers.rec_n_frames.get_frames();
-                    if nframes > 5 { return Ok(false); } // SECURITY: Do not accept arbitrary value from the outside.
+                    if nframes > 5 { 
+                        self.start_reception()?;
+                        return Ok(false); 
+                    } // SECURITY: Do not accept arbitrary value from the outside.
                     let mut cursor = Cursor::new(Vec::with_capacity((nframes as usize * MAX_LORA_PAYLOAD) as usize));
                     cursor.write_all(&mut buf[1..])?;
-                    for ch in self.channels.iter().skip(1).take(nframes as usize) {
+                    for ch in self.channels.iter().skip(1).take((nframes-1) as usize){
                         self.radio
                             .set_channel(&ch.radio_channel)
                             .map_err(|src| RadioError::InternalRadioError(src))?;
@@ -442,6 +449,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
                         }
                         if !new_frame {
                             eprintln!("Silencing missing following frame.");
+                            self.start_reception()?;
                             return Ok(false);
                         }
                         let mut buf_fp = [0u8; 256];
@@ -520,7 +528,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, T, C, E> {
         // TODO: Verify integrity if implemented
         info!("Handling reception of an incoming frame.");
         let (frame, _length) = RadioFrameWithHeaders::try_from_bytes(msg.as_slice())?;
-        if let Some(client) = &mut self.rx_client {
+        if let Some(client) = &self.rx_client {
             match frame.headers.recipients {
                 RecipientHeader::Direct(_) => {
                     info!("Forwarding payloads to the RxClient.");
@@ -536,12 +544,13 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, T, C, E> {
                     {
                         info!("Forwarding payloads to the RxClient.");
                         let pls : Vec<Vec<u8>> = pl.to_message_ids().iter().filter_map(|id| frame.payloads.get(*id as usize)).cloned().collect();
-                        if pls.len() < frame.headers.payloads.into() {
+                        println!("Debug pls: {:?}", pls);
+                        if dbg!(pls.len()) < frame.headers.payloads.into() {
                             eprintln!("WARN: Badly formatted frame: missing message.");
                             // TODO: Acknowledgment (Warn: do not send acknowledgment if the previous method failed)
                         }
                         for pl in pls {
-                            client.receive(frame.headers.sender.get_address(), pl, frame.headers.nonce);
+                            client.receive(dbg!(frame.headers.sender.get_address()), dbg!(pl), frame.headers.nonce);
                         } 
                         Ok(true)    
                     } else {

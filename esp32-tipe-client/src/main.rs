@@ -20,6 +20,8 @@ use radio_sx127x::Sx127xSpi;
 
 use radio_tipe_poc::device::radio::LoRaRadio;
 
+//use esp_backtrace as _;
+
 use core::fmt::Debug;
 
 mod echo_server;
@@ -80,10 +82,11 @@ fn main() -> Result<()> {
         }
     }).collect();
 
+    //let mut device = LoRaRadio::new(lora, &channels, None, None, 0b0101_0011);
+    //let mut handler = echo_client::EchoClient::new(device, vec!("HELO1", "HELO2", "Enchante de pouvoir communiquer avec vous!").into_iter().map(|s| s.as_bytes().to_owned()).collect());
+    
     let mut device = LoRaRadio::new(lora, &channels, None, None, 0b0101_0010);
-
-    let mut handler = echo_client::EchoClient::new(device, vec!("HELO1", "HELO2", "Enchante de pouvoir communiquer avec vous!").into_iter().map(|s| s.as_bytes().to_owned()).collect());
-    //let mut handler = echo_server::EchoServer::new(device);
+    let mut handler = echo_server::EchoServer::new(device);
     handler.spawn().map_err(|err| anyhow!("Handler error!\ncause: {:?}", err))?;
 
     println!("Stopping!");

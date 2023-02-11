@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use std::marker::PhantomData;
 use log::warn;
 use std::fmt::Debug;
-
+use std::sync::Arc;
 
 /// A basic echo server 
 pub struct EchoServer<'a,T: Device<'a>> {
@@ -28,9 +28,10 @@ impl<'a, T: Device<'a>> EchoServer<'a, T>
 
     pub fn spawn(&'a mut self) -> anyhow::Result<()> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(30);
-        let handler = ProtocolHandler {
+        let mut handler = Arc::new(ProtocolHandler {
             sender,       
-        };
+        });
+        self.device.set_receive_client(Box::new(handler));
         {
             self.device.start_reception()?;
             use std::sync::mpsc::RecvTimeoutError;
@@ -99,13 +100,14 @@ struct ProtocolHandler {
 }
 
 impl TxClient for ProtocolHandler {
-    fn send_done(&mut self, nonce: FrameNonce) -> Result<(), ()> {
+    fn send_done(&self, nonce: FrameNonce) -> Result<(), ()> {
         self.sender.try_send(ProtocolMessage::TransmissionDone(nonce)).map_err(|_| ())
     }
 }
 
 impl RxClient for ProtocolHandler {
-    fn receive(&mut self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce) -> Result<(), ()> {
-        self.sender.try_send(ProtocolMessage::RecievedMessage(sender, payload, nonce)).map_err(|_| ())
+    fn receive(&self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce) -> Result<(), ()> {
+        println!("RxClient received message {} from {}!", nonce, sender);
+        self.sender.try_send(ProtocolMessage::RecievedMessage(sender, dbg!(payload), nonce)).map_err(|_| ())
     }
 }

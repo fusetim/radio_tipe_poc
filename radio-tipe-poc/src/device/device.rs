@@ -1,5 +1,6 @@
 use crate::{LoRaAddress, LoRaDestination};
 use crate::device::frame::FrameNonce;
+use std::sync::Arc;
 
 /// Device trait represents a unit system that can receive and send messages using
 /// some complex features like Adaptive-Rate-Power-Rate, Acknowledgment or Packet Aggregation.
@@ -22,11 +23,11 @@ pub trait Device<'a> {
 
     /// Register the new transmission client which will recieve packet acknowledgment and
     /// transmission completion signal.
-    fn set_transmit_client(&mut self, client: &'a mut dyn TxClient);
+    fn set_transmit_client(&mut self, client: Box<dyn TxClient>);
 
     /// Register the new reciever client which will be call for every packet received matching
     // the device address.
-    fn set_receive_client(&mut self, client: &'a mut dyn RxClient);
+    fn set_receive_client(&mut self, client: Box<dyn RxClient>);
 
     /// Register this device with a new address.
     fn set_address(&mut self, address: LoRaAddress);
@@ -78,7 +79,13 @@ pub trait Device<'a> {
 /// of a previously queued payload.
 pub trait TxClient {
     /// Device acknowledgment of transmission completed
-    fn send_done(&mut self, nonce: FrameNonce) -> Result<(),()>;
+    fn send_done(&self, nonce: FrameNonce) -> Result<(),()>;
+}
+
+impl<T> TxClient for Arc<T> where T: TxClient {
+    fn send_done(&self, nonce: FrameNonce) -> Result<(),()> {
+        return T::send_done(self.as_ref(), nonce);
+    }
 }
 
 /// Device Rx Client
@@ -86,5 +93,11 @@ pub trait TxClient {
 /// Trait that act like a callback: this function will be called when the device will receive new payloads.
 pub trait RxClient {
     /// Device has received the given message.
-    fn receive(&mut self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce)-> Result<(),()>;
+    fn receive(&self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce)-> Result<(),()>;
+}
+
+impl<T> RxClient for Arc<T> where T: RxClient {
+    fn receive(&self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce)-> Result<(),()> {
+        return T::receive(self.as_ref(), sender, payload, nonce);
+    }
 }
