@@ -5,6 +5,7 @@ use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use anyhow::bail;
 use log::warn;
 
+use std::sync::Arc;
 use std::marker::PhantomData;
 use std::time::{Instant, Duration};
 use std::fmt::Debug;
@@ -30,15 +31,18 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
 
     pub fn spawn(&'a mut self) -> anyhow::Result<()> {
         let (sender, receiver) = std::sync::mpsc::sync_channel(30);
-        let mut handler = ProtocolHandler {
+        let mut handler = Arc::new(ProtocolHandler {
             sender,       
-        };
+        });
+        self.device.set_transmit_client(Box::new(handler.clone()));
+        self.device.set_receive_client(Box::new(handler));
         {
             self.device.start_reception()?;
             use std::sync::mpsc::RecvTimeoutError;
  
             // TODO : self.device.set_receive_client(&mut handler);
             let mut send_instant = Instant::now();
+            let mut should_transmit = false;
 
             loop {
                 match receiver.recv_timeout(Duration::from_millis(500)) {
@@ -50,24 +54,33 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
                                 let text = String::from_utf8_lossy(&payload);
                                 println!("Received payload (nonce:{}) from {:x}: {}", nonce, sender, text);
                             }
-                            ProtocolMessage::AcknowledgmentMessage(..) => unimplemented!(),
+                            ProtocolMessage::TransmissionSuccessful(rec, nonce) => println!("Recipient {} successfully received our message (nonce: {})!", rec, nonce),
+                            ProtocolMessage::TransmissionFailed(rec, nonce, payload) => { 
+                                println!("Recipient {} did not received our message (nonce: {})! Rescheduling it...", rec, nonce);
+                                self.messages.push(payload);
+                            },
+                            _ => unimplemented!(),
                         }
                     },
                     Err(RecvTimeoutError::Timeout) => {},
                     Err(RecvTimeoutError::Disconnected) => bail!("Fatal error: radio disconnected."), // TODO: Might do better error
                 }
 
-                if send_instant.elapsed() > Duration::from_secs(10) && !self.messages.is_empty(){
+                if send_instant.elapsed() > Duration::from_secs(10) || should_transmit {
                     send_instant = Instant::now();
                     if let Some(msg) = self.messages.pop() {
-                        match self.device.queue(LoRaDestination::Unique(0b0101_0010), &msg, false) {
-                            Ok(_) => {},
+                        match self.device.queue(LoRaDestination::Unique(0b0101_0010), &msg, true) {
+                            Ok(_) => should_transmit = true,
                             Err(QueueError::QueueFullError(err)) => warn!("Queue full?\ncauses: {:?}", err),
                             Err(QueueError::DeviceError(err)) => return Err(err.into()),
                         };
+                    }
+                    if should_transmit {
+                        should_transmit = false;
                         let mut attempts = 0;
                         let mut transmission_nonce = None;
-                        while (transmission_nonce.is_none() && attempts < 50) {
+                        while (transmission_nonce.is_none() && attempts < 5) {
+                            std::thread::sleep_ms(50);
                             attempts+=1;
                             match self.device.transmit() {
                                 Ok(nonce) => transmission_nonce = Some(nonce),
@@ -84,6 +97,10 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
 
                 if self.device.check_reception()? {
                     println!("We receive a new message :)");
+                    if self.device.queue_acknowledgements()? {
+                        println!("Acknowledging the received messsage.");
+                        should_transmit = true;
+                    }
                 } else {
                     print!(".");
                 }
@@ -95,8 +112,9 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
 
 enum ProtocolMessage {
     TransmissionDone(FrameNonce),
+    TransmissionSuccessful(LoRaAddress, FrameNonce),
+    TransmissionFailed(LoRaAddress, FrameNonce, Vec<u8>),
     RecievedMessage(LoRaAddress, Vec<u8>, FrameNonce),
-    AcknowledgmentMessage(FrameNonce, LoRaAddress),
 }
 
 struct ProtocolHandler {
@@ -104,8 +122,16 @@ struct ProtocolHandler {
 }
 
 impl TxClient for ProtocolHandler {
-    fn send_done(&self, nonce: FrameNonce) -> Result<(), ()> {
+    fn transmission_done(&self, nonce: FrameNonce) -> Result<(), ()> {
         self.sender.try_send(ProtocolMessage::TransmissionDone(nonce)).map_err(|_| ())
+    }
+
+    fn transmission_successful(&self, recipient: LoRaAddress, nonce: FrameNonce) -> Result<(),()> {
+        self.sender.try_send(ProtocolMessage::TransmissionSuccessful(recipient, nonce)).map_err(|_| ())
+    }
+
+    fn transmission_failed(&self, recipient: LoRaAddress, nonce: FrameNonce,  payload: Vec<u8>) -> Result<(),()> {
+        self.sender.try_send(ProtocolMessage::TransmissionFailed(recipient, nonce, payload)).map_err(|_| ())
     }
 }
 

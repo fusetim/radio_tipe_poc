@@ -23,8 +23,10 @@ rustflags = ["-C", "default-linker-libraries", "-C", "force-frame-pointers"]
 
 [unstable]
 
-#build-std = ["std", "panic_abort"]
-build-std = ["std"]
+sparse-registry = true
+
+build-std = ["std", "panic_abort"]
+#build-std = ["std"]
 #build-std-features = ["panic_immediate_abort"] # Required for older ESP-IDF versions without a realpath implementation
 
 [env]
@@ -33,3 +35,4 @@ build-std = ["std"]
 ESP_IDF_VERSION = { value = "branch:release/v4.4" }
 # Enables the esp-idf-sys "native" build feature (`cargo build --features native`) to build against ESP-IDF master (mainline)
 #ESP_IDF_VERSION = { value = "master" }
+ESP_IDF_SDKCONFIG = { value = "sdkconfig.defaults", relative = true }
