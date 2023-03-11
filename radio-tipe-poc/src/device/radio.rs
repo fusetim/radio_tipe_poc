@@ -5,11 +5,15 @@ use std::fmt::Debug;
 use log::{info, warn, debug, trace, log_enabled};
 use log::Level;
 
+use ringbuf::Rb;
+use ringbuf::HeapRb;
+
 use super::device::{Device, QueueError, RxClient, TxClient};
 use crate::{LoRaAddress, LoRaDestination};
 use std::marker::PhantomData;
 use std::io::Write;
 use crate::device::frame::FrameNonce;
+use crate::device::frame::AddressHeader;
 
 use std::time::{Duration, Instant};
 use std::io::Cursor;
@@ -97,9 +101,11 @@ where
     rx_client: Option<Box<dyn RxClient>>,
     tx_client: Option<Box<dyn TxClient>>,
     tx_buffer: Vec<LoRaMessage>,
+    tx_buf_acknowledgements: Vec<(AddressHeader, FrameNonce)>,
     tx_frame: Option<frame::RadioFrameWithHeaders>,
-    //rx_buffer: Option<(u8, Vec<u8>)>,
-    acknowledgments: HashMap<[u8; 64], Instant>,
+    tx_history: HeapRb<frame::RadioFrameWithHeaders>,
+    pending_rx_acknowledgements: Vec<(AddressHeader, FrameNonce)>,
+    pending_tx_acknowledgements: HeapRb<(AddressHeader, FrameNonce, Instant)>,
     address: LoRaAddress,
     phantom: PhantomData<E>,
 }
@@ -130,9 +136,13 @@ where
             tx_client,
             address,
             tx_buffer: Vec::new(),
+            tx_buf_acknowledgements: Vec::new(),
             tx_frame: None,
             channel_usages: usages,
-            acknowledgments: HashMap::new(),
+            tx_history: HeapRb::new(60), // Tx history is limited to 60 frames, a fair limit if we consider each frame need a second to be transmit and 
+                                         // we only need this history to retransmit a packet. Acknowledgement of a packet expired after 60s.
+            pending_rx_acknowledgements: Vec::new(),
+            pending_tx_acknowledgements: HeapRb::new(60), // Same reason
             phantom: PhantomData,
         }
     }
@@ -140,6 +150,7 @@ where
     fn build_trame(
         &self,
         buffer: &Vec<LoRaMessage>,
+        tx_buf_acknowledgements: &Vec<(AddressHeader, FrameNonce)>,
     ) -> Result<frame::RadioFrameWithHeaders, RadioError<E>> {
         let mut recipients: HashMap<frame::AddressHeader, frame::PayloadFlag> = HashMap::new();
         let mut payloads: Vec<frame::Payload> = Vec::new();
@@ -153,6 +164,11 @@ where
             }
             payloads.push(msg.payload.clone());
         }
+        for (ah, nonce) in tx_buf_acknowledgements {
+            if let None = recipients.get_mut(&(*ah).into()) {
+                recipients.insert((*ah).into(), frame::PayloadFlag::new(&[]));
+            }
+        }
         match recipients.len() {
             0 => Err(RadioError::InvalidRecipentsError {
                 context: format!("No registered recipient!"),
@@ -163,9 +179,13 @@ where
                     recipients: frame::RecipientHeader::Direct(recipients.iter().map(|(dest, _pf)| *dest).next().expect("First recipient does not exist while there is one recipient registered!")),
                     payloads: payloads.len() as u8,
                     sender: self.address.into(),
-                    nonce: 0, // TODO: implement nonce!!
+                    nonce: 0x1001, // TODO: implement nonce!!
                 };
-                let mut frame = frame::RadioFrameWithHeaders { headers, payloads };
+                let ffsize = headers.size() + tx_buf_acknowledgements.size();
+                if ffsize > MAX_LORA_PAYLOAD {
+                    return Err(RadioError::TooBigFirstFrameError { size: ffsize });
+                }
+                let mut frame = frame::RadioFrameWithHeaders { headers, acknowledgements: tx_buf_acknowledgements.clone(), payloads };
                 let len = frame.size();
                 if dbg!(len) > MAX_FRAME_LENGTH {
                     return Err(RadioError::TooBigFrameError { size: len });
@@ -182,7 +202,11 @@ where
                     sender: self.address.into(),
                     nonce: 0, // TODO: Implement nonce!!
                 };
-                let mut frame = frame::RadioFrameWithHeaders { headers, payloads };
+                let ffsize = headers.size() + tx_buf_acknowledgements.size();
+                if ffsize > MAX_LORA_PAYLOAD {
+                    return Err(RadioError::TooBigFirstFrameError { size: ffsize });
+                }
+                let mut frame = frame::RadioFrameWithHeaders { headers, acknowledgements: tx_buf_acknowledgements.clone(), payloads };
                 let len = frame.size();
                 if len > MAX_FRAME_LENGTH {
                     return Err(RadioError::TooBigFrameError { size: len });
@@ -232,6 +256,42 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
             }),
         }
     }
+
+    fn queue_acknowledgements(
+        &mut self,
+    ) -> Result<bool, QueueError<Self::DeviceError>> {
+        if self.pending_rx_acknowledgements.len() > 0 {
+            // Note: Hard-Limit of 16 acknowledgements by packet. This is not a hard requirement, nonetheless, in any case the acknowledgement 
+            // should be available in the first network frame, hence this particuliar limitation.
+            let n = 16 - self.tx_buf_acknowledgements.len();
+            if n > 0 {
+                let mut app = self.pending_rx_acknowledgements.drain(0..n).collect();
+                let mut ack_buf = self.tx_buf_acknowledgements.clone();
+                ack_buf.append(&mut app);
+                // Note: It might be possible to optimize a little bit more the number of acknowledgements by frame. Nonetheless, there is several parameters
+                // that intervene on the size of the packet: number of recipients, the number of messages received by minute, etc.. Therefore, while it might
+                // not be optimal, I'm not sure if those particular optimizations could result in significant improvements for the complexity they add.
+                match self.build_trame(&self.tx_buffer, &ack_buf) {
+                    Ok(frame) => {
+                        self.tx_buf_acknowledgements = ack_buf;
+                        self.tx_frame = Some(frame);
+                        Ok(true)
+                    }
+                    Err(RadioError::TooBigFrameError { size }) => {
+                        Err(QueueError::QueueFullError(RadioError::TooBigFrameError {
+                            size,
+                        }))
+                    }
+                    Err(err) => Err(QueueError::DeviceError(err)),
+                }
+            } else {
+                Err(QueueError::QueueFullError(RadioError::TooManyAcknowledgementsError{count: 16 + self.pending_rx_acknowledgements.len() }))
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
     fn queue<'b>(
         &mut self,
         dest: LoRaDestination,
@@ -271,7 +331,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
             dest: recipients,
             payload: payload.to_owned(),
         });
-        match self.build_trame(&buf) {
+        match self.build_trame(&buf, &self.tx_buf_acknowledgements) {
             Ok(frame) => {
                 self.tx_buffer = buf;
                 self.tx_frame = Some(frame);
@@ -358,9 +418,26 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
             }
         }
         println!("Clearing queue, acknowledging the transmission to API client");
+
+        self.tx_history.push(frame.clone());
+        match frame.headers.recipients {
+            RecipientHeader::Direct(ah) if ah.get_acknowledgment() => {
+                self.pending_tx_acknowledgements.push((ah.clone(), frame.headers.nonce.clone(), last.clone()));
+            },
+            RecipientHeader::Group(ahs) => {
+                for (ah,_) in ahs {
+                    if ah.get_acknowledgment() {
+                        self.pending_tx_acknowledgements.push((ah.clone(), frame.headers.nonce.clone(), last.clone()));
+                    } 
+                }
+            },
+            _ => { /* No acknowledgement requested */ },
+        }
         self.tx_frame = None;
+        self.tx_buffer.clear();
+        self.tx_buf_acknowledgements.clear();
         if let Some(client) = &self.tx_client {
-            client.send_done(nonce); // TODO: Error silenced here!
+            client.transmission_done(nonce); // TODO: Error silenced here!
         }
         Ok(nonce)
     }
@@ -377,6 +454,43 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'a, T, C, 
     }
 
     fn check_reception(&mut self) -> Result<bool, Self::DeviceError> {
+        info!("Checking missing acknowledgement...");
+        let mut next = self.pending_tx_acknowledgements.pop();
+        while let Some((ah, nonce, instant)) = next {
+            if instant.elapsed() < Duration::from_secs(60) {
+                let _ = self.pending_tx_acknowledgements.push_overwrite((ah, nonce, instant));
+                break;
+            }
+            if let Some(tx_client) = &self.tx_client {
+                let mut frame_ = self.tx_history.pop();
+                while frame_.is_some() && frame_.as_ref().unwrap().headers.nonce != nonce {
+                    frame_ = self.tx_history.pop();
+                }
+                if let Some(frame) = frame_ {
+                    self.tx_history.push(frame.clone());
+                    match &frame.headers.recipients { // TODO/SECURITY: Should we acknowledge Global message? Sounds like it enable DDOS attacks.
+                        RecipientHeader::Direct(ah2) if ah.get_address() == ah2.get_address() => {
+                            for pl in frame.payloads {
+                                let _ = tx_client.transmission_failed(ah.get_address(), nonce.clone(), pl.clone()); // TODO: Error silenced here!
+                            }
+                        },
+                        RecipientHeader::Group(ahs) => {
+                            for (ah2, pf) in ahs {
+                                if ah.get_address() == ah2.get_address() {
+                                    for mid in pf.to_message_ids() {
+                                        if let Some(pl) = frame.payloads.get(mid as usize) {
+                                            let _ = tx_client.transmission_failed(ah.get_address(), nonce.clone(), pl.clone()); // TODO: Error silenced here!
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {},
+                    }
+                }
+            }    
+            next = self.pending_tx_acknowledgements.pop();
+        }
         info!("checking_reception...");
         if self
             .radio
@@ -479,18 +593,18 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, T, C, E> {
         let now = Instant::now();
         for (i, ch) in self.channels.iter().enumerate().take(nframes as usize) {
             let (last_used, consumed) = self.channel_usages[i];
-            if (last_used - now) < Duration::from_secs(ch.delay.duty_interval)
+            if (now - last_used) < Duration::from_secs(ch.delay.duty_interval)
                 && consumed.as_secs_f64() / (ch.delay.duty_interval as f64) > ch.delay.duty_cycle
             {
                 return Err(RadioError::DutyCycleConsumed);
             }
-            if last_used.elapsed() < Duration::from_micros(ch.delay.min_delay) {
+            if (now - last_used) < Duration::from_micros(ch.delay.min_delay) {
                 return Err(RadioError::MinChannelDelayError);
             }
         }
         // Checking channels are available (well that the first one is available in reality based on protocol
         // assumptions).
-        let mut free_channel = true;// TODO / TEMP : Forced to true!
+        let mut free_channel = true; // TODO: For testing purposes only!!
         let mut attemps = 0;
         while !free_channel && attemps < MAX_ATTEMPT_FREE_CHANNEL {
             self.radio
@@ -528,31 +642,42 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, T, C, E> {
         // TODO: Verify integrity if implemented
         info!("Handling reception of an incoming frame.");
         let (frame, _length) = RadioFrameWithHeaders::try_from_bytes(msg.as_slice())?;
+        if let Some(tx_client) = &self.tx_client {
+            for (ah, nonce) in frame.acknowledgements {
+                if ah.get_address() == self.address {
+                    let _ = tx_client.transmission_successful(frame.headers.sender.get_address(), nonce.clone()); // TODO: Error silenced here.
+                }
+            }
+        }
         if let Some(client) = &self.rx_client {
             match frame.headers.recipients {
-                RecipientHeader::Direct(_) => {
+                RecipientHeader::Direct(ah) => {
                     info!("Forwarding payloads to the RxClient.");
                     for pl in frame.payloads {
-                        client.receive(frame.headers.sender.get_address(), pl, frame.headers.nonce);
-                        // TODO: Acknowledgment (Warn: do not send acknowledgment if the previous method failed)
+                        let _ = client.receive(frame.headers.sender.get_address(), pl, frame.headers.nonce); // TODO: Error silenced here!
+                    }
+                    if ah.get_acknowledgment() {
+                        let _ = self.pending_rx_acknowledgements.push((frame.headers.sender.clone(), frame.headers.nonce));
                     }
                     Ok(true)
                 }
                 RecipientHeader::Group(ahs) => {
-                    if let Some((_ah, pl)) =
-                        ahs.iter().find(|(ah, _pl)| ah.get_address() == self.address || ah.is_global())
+                    if let Some((ah, pl)) =
+                        ahs.iter().find(|(ah, _pl)| ah.get_address() == self.address || ah.is_global()) // TODO/BUG: Use filter not find!!
                     {
                         info!("Forwarding payloads to the RxClient.");
                         let pls : Vec<Vec<u8>> = pl.to_message_ids().iter().filter_map(|id| frame.payloads.get(*id as usize)).cloned().collect();
                         println!("Debug pls: {:?}", pls);
                         if dbg!(pls.len()) < frame.headers.payloads.into() {
                             eprintln!("WARN: Badly formatted frame: missing message.");
-                            // TODO: Acknowledgment (Warn: do not send acknowledgment if the previous method failed)
                         }
                         for pl in pls {
-                            client.receive(dbg!(frame.headers.sender.get_address()), dbg!(pl), frame.headers.nonce);
+                            let _ = client.receive(dbg!(frame.headers.sender.get_address()), dbg!(pl), frame.headers.nonce); // TODO: Error silenced here!
                         } 
-                        Ok(true)    
+                        if ah.get_acknowledgment() {
+                            let _ = self.pending_rx_acknowledgements.push((frame.headers.sender.clone(), frame.headers.nonce));
+                        }
+                        Ok(true)
                     } else {
                         info!("Group message frame ignored because we are not a recipient.");
                         Ok(false)
@@ -561,7 +686,7 @@ impl<'a, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, T, C, E> {
             }
         } else {
             info!("Frame received but no RxClient connected!");
-            return Ok(false)
+            Ok(false)
         }
     }
 }
@@ -578,8 +703,14 @@ pub enum RadioError<R>
 where
     R: Debug,
 {
-    #[error("Frame is too big to be transmit (is: {}B, max: {}B)!", .size, MAX_FRAME_LENGTH)]
+    #[error("Frame is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_FRAME_LENGTH)]
     TooBigFrameError { size: usize },
+
+    #[error("First frame (containing headers and acknowledgements) is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_LORA_PAYLOAD)]
+    TooBigFirstFrameError { size: usize },
+
+    #[error("Frame contains too much acknowledgements in one frame (is: {}, max: 16)!", .count)]
+    TooManyAcknowledgementsError { count: usize },
 
     #[error("Device failed to respect the sync interval.\nContext: {}", .context)]
     OutOfSync { context: String },

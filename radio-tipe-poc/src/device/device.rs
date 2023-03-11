@@ -59,7 +59,19 @@ pub trait Device<'a> {
     ///
     /// Note that this method can fail if the physical radio is not in reception mode (you should use
     /// [[Device::start_reception]] for that). Ypu might check this mode by using [[Device::is_listening]].
+    ///
+    /// Please note that you **MUST** acknowledge successful reception by calling [[Device::queue_acknowledgements]] in the 
+    /// 60s following this call. This is not done automatically by design, to allow packet aggregation and avoid
+    /// a transmission in a function called "reception".
     fn check_reception(&mut self) -> Result<bool, Self::DeviceError>;
+    
+    /// Queue and prepare acknowledgements (due to a successful reception) for the next frame.
+    ///
+    /// Returns [QueueError], on [QueueError::QueueFullError] queue need to be flush and transmit
+    /// before being able to call again this function.
+    fn queue_acknowledgements(
+        &mut self,
+    ) -> Result<bool, QueueError<Self::DeviceError>>; 
 
     /// Add given payload as packet to the internal queue.
     ///
@@ -79,12 +91,28 @@ pub trait Device<'a> {
 /// of a previously queued payload.
 pub trait TxClient {
     /// Device acknowledgment of transmission completed
-    fn send_done(&self, nonce: FrameNonce) -> Result<(),()>;
+    fn transmission_done(&self, nonce: FrameNonce) -> Result<(),()>;
+
+    /// Transmission was successful, got an acknowledgement from the given recipient for this particular message.
+    fn transmission_successful(&self, recipient: LoRaAddress, nonce: FrameNonce) -> Result<(),()>;
+
+    /// Transmission failed, while an acknowledgement was required, none was received by the device from the given recipient for this
+    /// particular message.
+    /// A retransmission can be asked by using [[Device::queue]] with the passed payload.
+    fn transmission_failed(&self, sender: LoRaAddress, nonce: FrameNonce, payload: Vec<u8>) -> Result<(),()>;
 }
 
 impl<T> TxClient for Arc<T> where T: TxClient {
-    fn send_done(&self, nonce: FrameNonce) -> Result<(),()> {
-        return T::send_done(self.as_ref(), nonce);
+    fn transmission_done(&self, nonce: FrameNonce) -> Result<(),()> {
+        return T::transmission_done(self.as_ref(), nonce);
+    }
+
+    fn transmission_successful(&self, recipient: LoRaAddress, nonce: FrameNonce) -> Result<(),()> {
+        return T::transmission_successful(self.as_ref(), recipient, nonce);
+    }
+
+    fn transmission_failed(&self, recipient: LoRaAddress, nonce: FrameNonce,  payload: Vec<u8>) -> Result<(),()> {
+        return T::transmission_failed(self.as_ref(), recipient, nonce, payload);
     }
 }
 

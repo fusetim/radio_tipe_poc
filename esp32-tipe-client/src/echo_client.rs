@@ -74,6 +74,8 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
                             Err(QueueError::QueueFullError(err)) => warn!("Queue full?\ncauses: {:?}", err),
                             Err(QueueError::DeviceError(err)) => return Err(err.into()),
                         };
+                        let txt = String::from_utf8_lossy(&msg);
+                        println!("Queue message {}", txt);
                     }
                     if should_transmit {
                         should_transmit = false;
@@ -88,8 +90,7 @@ impl<'a, T: Device<'a>> EchoClient<'a, T>
                             }
                         }
                         if let Some(nonce) = transmission_nonce {
-                            let txt = String::from_utf8_lossy(&msg);
-                            println!("Sending message (nonce: {}): {}", nonce, txt);
+                            println!("Sending message with nonce: {}", nonce);
                         }                        
                         self.device.start_reception()?;
                     }
