@@ -47,8 +47,8 @@ fn main() -> Result<()> {
 
     /* SPI Pinout
      * SCK :        05
-     * MISO :       18
-     * MOSI :       19
+     * MOSI :       18
+     * MISO :       19
      * NSS / nCS:   17
      * RESET:       16
      */
