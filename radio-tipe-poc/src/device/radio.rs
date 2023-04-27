@@ -110,7 +110,7 @@ where
     tx_frame: Option<frame::RadioFrameWithHeaders>,
     tx_history: HeapRb<frame::RadioFrameWithHeaders>,
     pending_rx_acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
-    pending_tx_acknowledgements: HeapRb<(AddressHeader, FrameNonce, Instant)>,
+    pending_tx_acknowledgements: HeapRb<(AddressHeader, FrameNonce, Instant, bool)>,
     address: LoRaAddress,
     phantom: PhantomData<E>,
 }
@@ -157,7 +157,7 @@ where
         }
     }
 
-    fn build_trame(
+    fn build_frame(
         &self,
         buffer: &Vec<LoRaMessage>,
         tx_buf_acknowledgements: &Vec<(AddressHeader, FrameNonce, i16)>,
@@ -275,13 +275,14 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
             // should be available in the first network frame, hence this particuliar limitation.
             let n = 16 - self.tx_buf_acknowledgements.len();
             if n > 0 {
-                let mut app = self.pending_rx_acknowledgements.drain(0..n).collect();
+                let take = usize::min(usize::min(16, n), self.pending_rx_acknowledgements.len());
+                let mut app = self.pending_rx_acknowledgements.drain(0..take).collect();
                 let mut ack_buf = self.tx_buf_acknowledgements.clone();
                 ack_buf.append(&mut app);
                 // Note: It might be possible to optimize a little bit more the number of acknowledgements by frame. Nonetheless, there is several parameters
                 // that intervene on the size of the packet: number of recipients, the number of messages received by minute, etc.. Therefore, while it might
                 // not be optimal, I'm not sure if those particular optimizations could result in significant improvements for the complexity they add.
-                match self.build_trame(&self.tx_buffer, &ack_buf) {
+                match self.build_frame(&self.tx_buffer, &ack_buf) {
                     Ok(frame) => {
                         self.tx_buf_acknowledgements = ack_buf;
                         self.tx_frame = Some(frame);
@@ -313,12 +314,16 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
             LoRaDestination::Global if ack => vec![frame::GLOBAL_ACKNOWLEDGMENT],
             LoRaDestination::Global => vec![frame::GLOBAL_NO_ACKNOWLEDGMENT],
             LoRaDestination::Unique(addr) if ack => {
+                // Register the future peer (the most early possible)
+                self.atpc.register_neighbor(addr);
                 vec![(addr & frame::ADDRESS_BITMASK) | frame::ACKNOWLEDGMENT_BITMASK]
             }
             LoRaDestination::Unique(addr) => vec![addr & frame::ADDRESS_BITMASK],
             LoRaDestination::Group(addrs) => addrs
                 .into_iter()
                 .map(|addr| {
+                    // Register the future peer (the most early possible)
+                    self.atpc.register_neighbor(addr);
                     if ack {
                         (addr & frame::ADDRESS_BITMASK) | frame::ACKNOWLEDGMENT_BITMASK
                     } else {
@@ -341,7 +346,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
             dest: recipients,
             payload: payload.to_owned(),
         });
-        match self.build_trame(&buf, &self.tx_buf_acknowledgements) {
+        match self.build_frame(&buf, &self.tx_buf_acknowledgements) {
             Ok(frame) => {
                 self.tx_buffer = buf;
                 self.tx_frame = Some(frame);
@@ -375,9 +380,23 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
         let mut buf = Vec::with_capacity(MAX_LORA_PAYLOAD + 1);
         let mut last = Instant::now();
         let nonce = frame.headers.nonce;
+        // ATPC: Calculate the TX power required then transmit
+        println!("Transmission, selecting TX power...");
+        let (tx_power, atpc_farest_peers) = {
+            match &frame.headers.recipients {
+                RecipientHeader::Direct(ah) => {
+                    self.atpc.get_min_tx_power(vec![ah.get_address()])
+                },
+                RecipientHeader::Group(ahs) => {
+                    let addrs : Vec<u16> = ahs.iter().map(|(ah, _)| ah.get_address()).collect();
+                    self.atpc.get_min_tx_power(addrs)
+                }
+            }
+        };
+        self.radio.set_power(tx_power).map_err(|src| RadioError::InternalRadioError(src))?;
         println!("Transmission starting...");
         for ch in self.channels.iter().take(nframes as usize) {
-            // TODO: Better Error distinctionbuf[0 for Internal Radio Error.
+            // TODO: Better Error distinction for Internal Radio Error.
             println!("Prepare radio for the correct channel");
             self.radio
                 .set_channel(&ch.radio_channel)
@@ -433,12 +452,16 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
         match frame.headers.recipients {
             // Do not require acknowledgment for GLOBAL as we do not want a retransmission.
             RecipientHeader::Direct(ah) if ah.get_acknowledgment() && !ah.is_global() => {
-                self.pending_tx_acknowledgements.push((ah.clone(), frame.headers.nonce.clone(), last.clone()));
+                self.pending_tx_acknowledgements.push((ah.clone(), frame.headers.nonce.clone(), last.clone(), true));
             },
             RecipientHeader::Group(ahs) => {
                 for (ah,_) in ahs {
                     if ah.get_acknowledgment() && !ah.is_global() {
-                        self.pending_tx_acknowledgements.push((ah.clone(), frame.headers.nonce.clone(), last.clone()));
+                        // ATPC: Determine if this particular peer should be updated in the ATPC on fail reception.
+                        // Reason? In group message, transmit power can be much more higher than the threshold required
+                        // by another recipient, therefore we should only update the recipients with the highest threshold. 
+                        let should_update = atpc_farest_peers.binary_search(&ah.get_address()).is_ok();
+                        self.pending_tx_acknowledgements.push((ah.clone(), frame.headers.nonce.clone(), last.clone(), should_update));
                     } 
                 }
             },
@@ -467,11 +490,14 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
     fn check_reception(&mut self) -> Result<bool, Self::DeviceError> {
         info!("Checking missing acknowledgement...");
         let mut next = self.pending_tx_acknowledgements.pop();
-        // TODO ATPC: Do what is needed for report_failed_reception
-        while let Some((ah, nonce, instant)) = next {
+        while let Some((ah, nonce, instant, update_atpc)) = next {
             if instant.elapsed() < Duration::from_secs(60) {
-                let _ = self.pending_tx_acknowledgements.push_overwrite((ah, nonce, instant));
+                let _ = self.pending_tx_acknowledgements.push_overwrite((ah, nonce, instant, update_atpc));
                 break;
+            }
+            // ATPC: Report the missing acknowledgment as a failed reception for this peer.
+            if update_atpc {
+                self.atpc.report_failed_reception(ah.get_address());
             }
             if let Some(tx_client) = &self.tx_client {
                 let mut frame_ = self.tx_history.pop();
@@ -516,11 +542,11 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                     info!("Packet ignored: size <= 0");
                     return Ok(false);
                 }
-                if buf[0] != (FrameType::Message as u8) && buf[0] != (FrameType::RelayMessage as u8)
+                if buf[0] != (FrameType::Message as u8) && buf[0] != (FrameType::BroadcastCheckSignal as u8)
                 {
                     // TODO: Handle other frame types
                     // For now, it is ignored as not a inbound message.
-                    info!("Packet ignored: FrameType is not (Relay-)Message, it is {}!", buf[0]);
+                    info!("Packet ignored: FrameType is not Message, it is {}!", buf[0]);
                     return Ok(false);
                 }
                 let (headers, _read) = RadioHeaders::try_from_bytes(&buf[1..])
@@ -590,6 +616,73 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
         }
         return Ok(false);
     }
+
+    // Informs the application that the ATPC/radio would like to send beacons.
+    fn is_beacon_needed(&mut self) -> bool {
+        return self.atpc.is_beacon_needed();
+    }
+
+    // Force the radio to send ATPC beacons.
+    fn transmit_beacon(&mut self) -> Result<(), QueueError<Self::DeviceError>> {
+        // Report busy device
+        if self.is_transmitting()? {
+            return Err(QueueError::DeviceError(RadioError::BusyDevice));
+        }
+
+        let mut tx_buf = vec![];
+        tx_buf.push(LoRaMessage {
+            dest: vec![frame::GLOBAL_ACKNOWLEDGMENT],
+            payload: vec![],
+        });
+
+        // Check channel availability
+        println!("Channel check");
+        self.transmission_check(1)?;
+        let mut last = Instant::now();
+
+        let powers = self.atpc.get_beacon_powers();
+
+        let mut buf = Vec::new();
+        for (tpi, tp) in powers.iter().enumerate() {
+            let frame = self.build_frame(&tx_buf, &Vec::new())?;
+            let bytes = frame.to_bytes();
+            self.radio.set_power(*tp).map_err(|src| RadioError::InternalRadioError(src))?;
+            self.atpc.register_beacon(tpi, frame.headers.nonce.clone());
+            self.radio
+                .set_channel(&self.channels[0].radio_channel)
+                .map_err(|src| RadioError::InternalRadioError(src))?;
+            buf.push((FrameType::BroadcastCheckSignal as u8).to_be());
+            buf.extend_from_slice(&bytes[..]);
+            last = Instant::now();
+            self.radio
+                .start_transmit(&buf)
+                .map_err(|src| RadioError::InternalRadioError(src))?;
+            buf.clear();
+            while !self
+                .radio
+                .check_transmit()
+                .map_err(|src| RadioError::InternalRadioError(src))?
+            {
+                println!("Transmission check");
+                self.radio.delay_ms(100);
+            }
+            println!("Beacon at TP {} successful, updating stats", tp);
+            let consumed = {
+                let (clast, consumed) = self.channel_usages[0];
+                if clast.elapsed().as_micros() > self.channels[0].delay.duty_interval.into() {
+                    Duration::from_millis(400)
+                } else {
+                    consumed + Duration::from_millis(400)
+                }
+            };
+            if let Some(delay) = 600_u32.checked_sub(last.elapsed().as_millis() as u32) {
+                self.radio.delay_ms(delay);
+            }
+            self.channel_usages[0] = (last.clone(), consumed);
+            self.tx_history.push(frame.clone());
+        }
+        Ok(())
+    }
 }
 
 impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, A, T, C, E> {
@@ -656,7 +749,10 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, A, T, C, E> 
         if let Some(tx_client) = &self.tx_client {
             for (ah, nonce, drssi) in frame.acknowledgements {
                 if ah.get_address() == self.address {
-                    self.atpc.report_successful_reception(frame.headers.sender.get_address(), drssi);
+                    println!("DEBUG: Peer {} acknowledged the reception of message {} with a DRSSI of {} dBm", frame.headers.sender.get_address(), nonce.clone(), drssi.clone());
+                    // ATPC: Report the successful reception of a frame by a peer.
+                    self.atpc.report_successful_reception(frame.headers.sender.get_address(), nonce.clone(), drssi);
+                    // TxClient: Report successful reception by a peer.
                     let _ = tx_client.transmission_successful(frame.headers.sender.get_address(), nonce.clone()); // TODO: Error silenced here.
                 }
             }

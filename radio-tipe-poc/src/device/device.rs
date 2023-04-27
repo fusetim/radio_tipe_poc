@@ -1,18 +1,26 @@
+//! Definitions for the abstract device driver.
+//!
+//! It is the essential trait that all applications will have to use to interact with 
+//! the radio.
+
 use crate::{LoRaAddress, LoRaDestination};
 use crate::device::frame::FrameNonce;
 use std::sync::Arc;
 
-/// Device trait represents a unit system that can receive and send messages using
-/// some complex features like Adaptive-Rate-Power-Rate, Acknowledgment or Packet Aggregation.
+/// Wrapper for an error that might be indicated a full queue.
 #[derive(thiserror::Error, Debug)]
 pub enum QueueError<T> {
+    /// This error is due to other reasons than a full queue.
     #[error("Internal device error. Error not linked to queue being full, no need to transmit.")]
     DeviceError(#[from] T),
+    /// This error results from a full queue. The queue must be cleared (by transmitting for instance)
+    /// before you call again the function.
     #[error("Queue is full. Transmit first to clear the queue and try again.")]
     QueueFullError(#[source] T),
 }
 
-/// Radio Device trait, representation for a specific device implementing the protocol.
+/// Device trait represents a unit system that can receive and send messages using
+/// some complex features like Adaptive-Rate-Power-Rate, Acknowledgment or Packet Aggregation.
 ///
 /// TODO: Give default implementation for most of the inner method when they are not related to
 /// a specifi radio implementation.
@@ -48,7 +56,7 @@ pub trait Device<'a> {
 
     /// Put the device in listening mode, waiting to recieve new packets on its address.
     ///
-    /// Periodical check need to be made with [[Device::check_reception]] to poll internal radio state
+    /// Periodical check need to be made with [Device::check_reception] to poll internal radio state
     /// and retrieve the received message by the physical device.
     fn start_reception(&mut self) -> Result<(), Self::DeviceError>;
 
@@ -58,9 +66,9 @@ pub trait Device<'a> {
     /// and retrieve the received message by the physical device.
     ///
     /// Note that this method can fail if the physical radio is not in reception mode (you should use
-    /// [[Device::start_reception]] for that). Ypu might check this mode by using [[Device::is_listening]].
+    /// [[Device::start_reception]] for that). Ypu might check this mode by using [Device::is_listening].
     ///
-    /// Please note that you **MUST** acknowledge successful reception by calling [[Device::queue_acknowledgements]] in the 
+    /// Please note that you **MUST** acknowledge successful reception by calling [Device::queue_acknowledgements] in the 
     /// 60s following this call. This is not done automatically by design, to allow packet aggregation and avoid
     /// a transmission in a function called "reception".
     fn check_reception(&mut self) -> Result<bool, Self::DeviceError>;
@@ -83,11 +91,17 @@ pub trait Device<'a> {
         payload: &'b [u8],
         ack: bool,
     ) -> Result<(), QueueError<Self::DeviceError>>;
+
+    // Informs the application that the ATPC/radio would like to send beacons.
+    fn is_beacon_needed(&mut self) -> bool;
+
+    // Force the radio to send ATPC beacons.
+    fn transmit_beacon(&mut self) -> Result<(), QueueError<Self::DeviceError>>;
 }
 
-/// Device Tx Client
+/// Transmission client, that acts like a callback on transmission of a message.
 ///
-/// Trait that act like a callback: device will call this function to acknowledge completion and/or reception
+/// Device will call this function to acknowledge completion and/or reception
 /// of a previously queued payload.
 pub trait TxClient {
     /// Device acknowledgment of transmission completed
@@ -116,9 +130,9 @@ impl<T> TxClient for Arc<T> where T: TxClient {
     }
 }
 
-/// Device Rx Client
+/// Reception client, acts like a callback on reception of radio messages.
 ///
-/// Trait that act like a callback: this function will be called when the device will receive new payloads.
+/// The inner functiosn will be called when the device will receive new payloads.
 pub trait RxClient {
     /// Device has received the given message.
     fn receive(&self, sender: LoRaAddress, payload: Vec<u8>, nonce: FrameNonce)-> Result<(),()>;

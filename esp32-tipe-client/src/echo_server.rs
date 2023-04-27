@@ -51,7 +51,11 @@ impl<'a, T: Device<'a>> EchoServer<'a, T>
         self.device.set_transmit_client(Box::new(handler.clone()));
         self.device.set_receive_client(Box::new(handler));
         {
+            println!("Initializing ATPC (transmitting beacons)...");
             self.device.start_reception()?;
+            //self.device.transmit_beacon()?;
+            self.device.start_reception()?;
+
             use std::sync::mpsc::RecvTimeoutError;
             let mut c = 0;
             let mut should_transmit = false;
@@ -118,6 +122,11 @@ impl<'a, T: Device<'a>> EchoServer<'a, T>
                         }
                         println!();
                     }
+                }
+                if self.device.is_beacon_needed() {
+                    println!("Transmitting beacons (ATPC Update needed)...");
+                    self.device.transmit_beacon()?;
+                    self.device.start_reception()?;
                 }
             }
         }

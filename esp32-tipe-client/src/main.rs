@@ -82,11 +82,13 @@ fn main() -> Result<()> {
         }
     }).collect();
 
-    //let mut device = LoRaRadio::new(lora, &channels, None, None, 0b0101_0011);
-    //let mut handler = echo_client::EchoClient::new(device, vec!("HELO1", "HELO2", "Enchante de pouvoir communiquer avec vous!").into_iter().map(|s| s.as_bytes().to_owned()).collect());
+    let atpc = radio_tipe_poc::device::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
+
+    let mut device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0011);
+    let mut handler = echo_client::EchoClient::new(device, vec!("HELO1", "HELO2", "Enchante de pouvoir communiquer avec vous!").into_iter().map(|s| s.as_bytes().to_owned()).collect());
     
-    let mut device = LoRaRadio::new(lora, &channels, None, None, 0b0101_0010);
-    let mut handler = echo_server::EchoServer::new(device);
+    //let mut device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0010);
+    //let mut handler = echo_server::EchoServer::new(device);
     handler.spawn().map_err(|err| anyhow!("Handler error!\ncause: {:?}", err))?;
 
     println!("Stopping!");

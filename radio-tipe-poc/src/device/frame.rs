@@ -1,13 +1,14 @@
+//! Frame description, utilities and helpers.
 
 pub enum FrameType {
     Message = 0,
 //    Acknowledgment = 1, - DEPRECATED
-    RelayAnnouncement = 2,
+//    RelayAnnouncement = 2,
 //    RelayAnnouncementAcknowledgment = 3, - DEPRECATED
-    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
+//    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
 //    RelayAcknowledgment = 5, // Use the same Frame template as Acknowledgment, just a different FrameType. - DEPRECATED
     BroadcastCheckSignal = 6,
-    BroadcastCheckSignalReply = 7,
+//  BroadcastCheckSignalReply = 7,
 }
 
 /// Trait to calculate size on frame for every component on frame.
@@ -44,6 +45,7 @@ pub struct RadioFrameWithHeaders {
     /// Frame headers
     pub headers: RadioHeaders,
     /// Frame acknowledgement (to allow a node to acknowledge messages that it previously received)
+    ///
     /// Note the last element being the RSSI delta between what the sender RSSI wanted and the RSSI of the recieved 
     /// packet.
     pub acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
