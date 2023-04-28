@@ -20,7 +20,6 @@ use std::num::NonZeroUsize;
 use std::time::Duration;
 use std::time::Instant;
 
-use bitflags::bitflags;
 use lru::LruCache;
 
 /// Modelisation of the RSSI on the receiver end when the transmitter uses a particular
@@ -184,8 +183,6 @@ pub struct DefaultATPC {
     default_tp: u8,
     /// The minimal RSSI threashold that the radio will consider acceptable.
     lower_rssi: i16,
-    /// The target RSSI that the radio thinks is sufficient to ensure a good reception.
-    target_rssi: i16,
     /// Delay between beacon broadcasting.
     ///
     /// 8h seems a good value.
@@ -201,7 +198,6 @@ impl DefaultATPC {
     pub fn new(
         transmission_powers: Vec<i8>,
         default_tp: impl Into<u8>,
-        target_rssi: i16,
         lower_rssi: i16,
         beacon_delay: Duration,
     ) -> Self {
@@ -213,7 +209,6 @@ impl DefaultATPC {
             transmission_powers,
             default_tp: default_tp_,
             lower_rssi,
-            target_rssi,
             beacons: LruCache::new(NonZeroUsize::new(tp_len + 1).unwrap()),
             last_beacon: Instant::now(),
             beacon_delay,
@@ -400,41 +395,41 @@ impl ATPC for TestingATPC {
         return vec![];
     }
 
-    fn register_beacon(&mut self, tpi: usize, nonce: FrameNonce) {
+    fn register_beacon(&mut self, _tpi: usize, _nonce: FrameNonce) {
         // NO-OP
     }
 
-    fn register_neighbor(&mut self, neighbor_addr: LoRaAddress) -> bool {
+    fn register_neighbor(&mut self, _neighbor_addr: LoRaAddress) -> bool {
         // NO OP
         true
     }
 
-    fn unregister_neighbor(&mut self, neighbor_addr: LoRaAddress) -> bool {
+    fn unregister_neighbor(&mut self, _neighbor_addr: LoRaAddress) -> bool {
         // NO OP
         true
     }
 
-    fn get_tx_power(&mut self, neighbor_addr: LoRaAddress) -> i8 {
+    fn get_tx_power(&mut self, _neighbor_addr: LoRaAddress) -> i8 {
         let tp = self.transmission_powers[self.counter];
         let len = self.transmission_powers.len();
         self.counter = (self.counter + 1) % len;
         return tp;
     }
 
-    fn get_min_tx_power(&mut self, mut neighbor_addrs: Vec<LoRaAddress>) -> (i8, Vec<LoRaAddress>) {
+    fn get_min_tx_power(&mut self, neighbor_addrs: Vec<LoRaAddress>) -> (i8, Vec<LoRaAddress>) {
         return (self.get_tx_power(*&neighbor_addrs[0]), neighbor_addrs);
     }
 
     fn report_successful_reception(
         &mut self,
-        neighbor_addr: LoRaAddress,
-        nonce: FrameNonce,
-        drssi: i16,
+        _neighbor_addr: LoRaAddress,
+        _nonce: FrameNonce,
+        _drssi: i16,
     ) {
         // NO OP
     }
 
-    fn report_failed_reception(&mut self, neighbor_addr: LoRaAddress) {
+    fn report_failed_reception(&mut self, _neighbor_addr: LoRaAddress) {
         // NO OP
     }
 }

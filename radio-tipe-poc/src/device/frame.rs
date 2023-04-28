@@ -49,11 +49,11 @@ pub struct RadioHeaders {
 pub struct RadioFrameWithHeaders {
     /// Frame headers
     pub headers: RadioHeaders,
-    /// Frame acknowledgement (to allow a node to acknowledge messages that it previously received)
+    /// Frame acknowledgment (to allow a node to acknowledge messages that it previously received)
     ///
     /// Note the last element being the RSSI delta between what the sender RSSI wanted and the RSSI of the recieved
     /// packet.
-    pub acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
+    pub acknowledgments: Vec<(AddressHeader, FrameNonce, i16)>,
     /// Frame payloads
     pub payloads: Vec<Payload>,
 }
@@ -65,7 +65,7 @@ pub type RadioFrame = Vec<Payload>;
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct InfoHeader(u8);
 
-/// Compact representation of recipient (with payload association) and acknowledgement handling.
+/// Compact representation of recipient (with payload association) and acknowledgment handling.
 #[derive(Clone, Debug)]
 pub enum RecipientHeader {
     /// Direct message, there is only one recipient and all of the message is for it.
@@ -216,7 +216,7 @@ impl PayloadFlag {
             /*if ((self.0 >> i) & 1) == 1 {
                 ids.push(i);
             }*/
-            if ((self.0 & (1 << i)) > 0) {
+            if (self.0 & (1 << i)) > 0 {
                 ids.push(i);
             }
         }
@@ -408,10 +408,10 @@ impl RadioFrameWithHeaders {
             "Number of payload is invalid, not equal number in header and in frame."
         );
 
-        // Acknowledgement
-        let ack_size: u8 = self.acknowledgements.len() as u8;
+        // Acknowledgment
+        let ack_size: u8 = self.acknowledgments.len() as u8;
         bytes.push(ack_size.to_be());
-        for (ah, nonce, drssi) in &self.acknowledgements {
+        for (ah, nonce, drssi) in &self.acknowledgments {
             let ah_raw: u16 = ah.clone().into();
             bytes.append(&mut ah_raw.to_be_bytes().to_vec());
             let nonce_raw: u64 = nonce.clone().into();
@@ -432,14 +432,14 @@ impl RadioFrameWithHeaders {
         let (headers, read) = RadioHeaders::try_from_bytes(bytes)?;
         let mut cursor = read;
         let mut payloads = Vec::new();
-        let mut acknowledgements = Vec::new();
+        let mut acknowledgments = Vec::new();
         let ack_size = u8::from_be(bytes[cursor]);
         cursor += 1;
         for _i in 0..(ack_size as usize) {
             if bytes.len() < cursor + 2 + FRAME_NONCE_SIZE {
                 // TODO: Remove hardcoded constante!!
                 return Err(FrameError::InvalidHeader {
-                    context: Some(format!("Fail to read acknowledgement at byte {}!", cursor)),
+                    context: Some(format!("Fail to read acknowledgment at byte {}!", cursor)),
                 });
             };
             let mut ah_raw = [0u8; 2];
@@ -453,7 +453,7 @@ impl RadioFrameWithHeaders {
                 &bytes[(cursor + 2 + FRAME_NONCE_SIZE)..(cursor + 2 + FRAME_NONCE_SIZE + 2)],
             );
             let drssi = i16::from_be_bytes(drssi_raw);
-            acknowledgements.push((ah, nonce, drssi));
+            acknowledgments.push((ah, nonce, drssi));
             cursor += 2 + FRAME_NONCE_SIZE + 2;
         }
         for _i in 0..(headers.payloads as usize) {
@@ -480,7 +480,7 @@ impl RadioFrameWithHeaders {
         Ok((
             RadioFrameWithHeaders {
                 headers,
-                acknowledgements,
+                acknowledgments,
                 payloads,
             },
             cursor,
@@ -561,7 +561,7 @@ impl FrameSize for RadioHeaders {
 
 impl FrameSize for RadioFrameWithHeaders {
     fn size(&self) -> usize {
-        self.headers.size() + self.payloads.size() + self.acknowledgements.size()
+        self.headers.size() + self.payloads.size() + self.acknowledgments.size()
     }
 }
 
@@ -1059,7 +1059,7 @@ mod tests {
         let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
             headers: h1,
-            acknowledgements: vec![],
+            acknowledgments: vec![],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
@@ -1074,7 +1074,7 @@ mod tests {
         let mut nonce_raw = [0u8; 8];
         nonce_raw.copy_from_slice(&rfb1[7..15]);
         assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708); // nonce
-        assert_eq!(rfb1[15], 0); // Acknowledgement size (0)
+        assert_eq!(rfb1[15], 0); // Acknowledgment size (0)
         assert_eq!(rfb1[16], 0); // Length of the first payload (part1)
         assert_eq!(rfb1[17], 5); // Length of the first payload (part2) -- here 5
         let pld1: Vec<u8> = rfb1[18..(18 + 5)].iter().map(|b| u8::from_be(*b)).collect();
@@ -1097,7 +1097,7 @@ mod tests {
         let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
             headers: h1.clone(),
-            acknowledgements: vec![],
+            acknowledgments: vec![],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
@@ -1112,12 +1112,12 @@ mod tests {
             RecipientHeader::Direct(ahd1) => assert_eq!(ahd1.0, ah1.0),
             _ => panic!("expected one recipient"),
         }
-        assert_eq!(rfd1.acknowledgements.len(), 0);
+        assert_eq!(rfd1.acknowledgments.len(), 0);
         assert_eq!(rfd1.payloads[0], pl1);
     }
 
     #[test]
-    fn frame_encode_radio_frame_with_acknowledgement() {
+    fn frame_encode_radio_frame_with_acknowledgment() {
         let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let ah2 = AddressHeader::new(0b00000001_00000000, false);
@@ -1138,7 +1138,7 @@ mod tests {
         let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
             headers: h1,
-            acknowledgements: vec![(ah2, nonce1, drssi1), (ah3, nonce2, drssi2)],
+            acknowledgments: vec![(ah2, nonce1, drssi1), (ah3, nonce2, drssi2)],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
@@ -1153,7 +1153,7 @@ mod tests {
         let mut nonce_raw = [0u8; 8];
         nonce_raw.copy_from_slice(&rfb1[7..15]);
         assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708); // nonce
-        assert_eq!(rfb1[15], 2); // Acknowledgement size (0)
+        assert_eq!(rfb1[15], 2); // Acknowledgment size (0)
         let mut ah2_raw = [0u8; 2];
         ah2_raw.copy_from_slice(&rfb1[16..18]);
         assert_eq!(u16::from_be_bytes(ah2_raw), ah2.0); // address 2
@@ -1179,7 +1179,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_decode_radio_frame_with_acknowledgement() {
+    fn frame_decode_radio_frame_with_acknowledgment() {
         let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let ah2 = AddressHeader::new(0b00000001_00000000, false);
@@ -1200,7 +1200,7 @@ mod tests {
         let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
             headers: h1.clone(),
-            acknowledgements: vec![(ah2, nonce1, drssi1), (ah3, nonce2, drssi2)],
+            acknowledgments: vec![(ah2, nonce1, drssi1), (ah3, nonce2, drssi2)],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
@@ -1215,13 +1215,13 @@ mod tests {
             RecipientHeader::Direct(ahd1) => assert_eq!(ahd1.0, ah1.0),
             _ => panic!("expected one recipient"),
         }
-        assert_eq!(rfd1.acknowledgements.len(), 2);
-        assert_eq!(rfd1.acknowledgements[0].0 .0, ah2.0);
-        assert_eq!(rfd1.acknowledgements[0].1, nonce1);
-        assert_eq!(rfd1.acknowledgements[0].2, drssi1);
-        assert_eq!(rfd1.acknowledgements[1].0 .0, ah3.0);
-        assert_eq!(rfd1.acknowledgements[1].1, nonce2);
-        assert_eq!(rfd1.acknowledgements[1].2, drssi2);
+        assert_eq!(rfd1.acknowledgments.len(), 2);
+        assert_eq!(rfd1.acknowledgments[0].0 .0, ah2.0);
+        assert_eq!(rfd1.acknowledgments[0].1, nonce1);
+        assert_eq!(rfd1.acknowledgments[0].2, drssi1);
+        assert_eq!(rfd1.acknowledgments[1].0 .0, ah3.0);
+        assert_eq!(rfd1.acknowledgments[1].1, nonce2);
+        assert_eq!(rfd1.acknowledgments[1].2, drssi2);
         assert_eq!(rfd1.payloads[0], pl1);
     }
 }

@@ -64,8 +64,7 @@
 //! You can now use the [Device] implementation to actually run the protocol. Enjoy!
 
 use embedded_hal::blocking::delay::{DelayMs, DelayUs};
-use log::Level;
-use log::{debug, info, log_enabled, trace, warn};
+use log::info;
 use radio::{Interrupts, Power, Receive, ReceiveInfo, State, Transmit};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -196,13 +195,13 @@ where
     /// Internal queue of messages to transmit.
     tx_buffer: Vec<LoRaMessage>,
     /// Internal queue of acknowledgment to transmit.
-    tx_buf_acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
+    tx_buf_acknowledgments: Vec<(AddressHeader, FrameNonce, i16)>,
     /// Internal intermediate frame to transmit.
     tx_frame: Option<frame::RadioFrameWithHeaders>,
     /// Internal history of transmissions (to allow retransmissions).
     tx_history: HeapRb<frame::RadioFrameWithHeaders>,
     /// Internal queue of pending acknowledgment to transmit.
-    pending_rx_acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
+    pending_rx_acknowledgments: Vec<(AddressHeader, FrameNonce, i16)>,
     /// Internal list of awaiting acknowledgments.
     ///
     /// Each item represents a tuple of the recipient address, the nonce of the associated frame,
@@ -211,7 +210,7 @@ where
     ///
     /// This last item is particularly useful when a frame is intended for more than one recipient
     /// and they do not share the same level of transmission power.
-    pending_tx_acknowledgements: HeapRb<(AddressHeader, FrameNonce, Instant, bool)>,
+    pending_tx_acknowledgments: HeapRb<(AddressHeader, FrameNonce, Instant, bool)>,
     /// The radio address.
     ///
     /// It defines what frames the radio will listen to.
@@ -250,13 +249,13 @@ where
             tx_client,
             address,
             tx_buffer: Vec::new(),
-            tx_buf_acknowledgements: Vec::new(),
+            tx_buf_acknowledgments: Vec::new(),
             tx_frame: None,
             channel_usages: usages,
             tx_history: HeapRb::new(60), // Tx history is limited to 60 frames, a fair limit if we consider each frame need a second to be transmit and
-            // we only need this history to retransmit a packet. Acknowledgement of a packet expired after 60s.
-            pending_rx_acknowledgements: Vec::new(),
-            pending_tx_acknowledgements: HeapRb::new(60), // Same reason
+            // we only need this history to retransmit a packet. Acknowledgment of a packet expired after 60s.
+            pending_rx_acknowledgments: Vec::new(),
+            pending_tx_acknowledgments: HeapRb::new(60), // Same reason
             phantom: PhantomData,
         }
     }
@@ -268,7 +267,7 @@ where
     fn build_frame(
         &self,
         buffer: &Vec<LoRaMessage>,
-        tx_buf_acknowledgements: &Vec<(AddressHeader, FrameNonce, i16)>,
+        tx_buf_acknowledgments: &Vec<(AddressHeader, FrameNonce, i16)>,
     ) -> Result<frame::RadioFrameWithHeaders, RadioError<E>> {
         let mut recipients: HashMap<frame::AddressHeader, frame::PayloadFlag> = HashMap::new();
         let mut payloads: Vec<frame::Payload> = Vec::new();
@@ -284,7 +283,7 @@ where
             payloads.push(msg.payload.clone());
         }
         // Builds the acknowledgment list and the associated recipient list.
-        for (ah, _nonce, _drssi) in tx_buf_acknowledgements {
+        for (ah, _nonce, _drssi) in tx_buf_acknowledgments {
             if let None = recipients.get_mut(&(*ah).into()) {
                 recipients.insert((*ah).into(), frame::PayloadFlag::new(&[]));
             }
@@ -302,13 +301,13 @@ where
                     sender: self.address.into(),
                     nonce: 0x1001, // TODO: implement nonce!!
                 };
-                let ffsize = headers.size() + tx_buf_acknowledgements.size();
+                let ffsize = headers.size() + tx_buf_acknowledgments.size();
                 if ffsize > MAX_LORA_PAYLOAD {
                     return Err(RadioError::TooBigFirstFrameError { size: ffsize });
                 }
                 let mut frame = frame::RadioFrameWithHeaders {
                     headers,
-                    acknowledgements: tx_buf_acknowledgements.clone(),
+                    acknowledgments: tx_buf_acknowledgments.clone(),
                     payloads,
                 };
                 let len = frame.size();
@@ -327,13 +326,13 @@ where
                     sender: self.address.into(),
                     nonce: 0, // TODO: Implement nonce!!
                 };
-                let ffsize = headers.size() + tx_buf_acknowledgements.size();
+                let ffsize = headers.size() + tx_buf_acknowledgments.size();
                 if ffsize > MAX_LORA_PAYLOAD {
                     return Err(RadioError::TooBigFirstFrameError { size: ffsize });
                 }
                 let mut frame = frame::RadioFrameWithHeaders {
                     headers,
-                    acknowledgements: tx_buf_acknowledgements.clone(),
+                    acknowledgments: tx_buf_acknowledgments.clone(),
                     payloads,
                 };
                 let len = frame.size();
@@ -386,22 +385,22 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
         }
     }
 
-    fn queue_acknowledgements(&mut self) -> Result<bool, QueueError<Self::DeviceError>> {
-        if self.pending_rx_acknowledgements.len() > 0 {
-            // Note: Hard-Limit of 16 acknowledgements by packet. This is not a hard requirement, nonetheless, in any case the acknowledgement
+    fn queue_acknowledgments(&mut self) -> Result<bool, QueueError<Self::DeviceError>> {
+        if self.pending_rx_acknowledgments.len() > 0 {
+            // Note: Hard-Limit of 16 acknowledgments by packet. This is not a hard requirement, nonetheless, in any case the acknowledgment
             // should be available in the first network frame, hence this particuliar limitation.
-            let n = 16 - self.tx_buf_acknowledgements.len();
+            let n = 16 - self.tx_buf_acknowledgments.len();
             if n > 0 {
-                let take = usize::min(usize::min(16, n), self.pending_rx_acknowledgements.len());
-                let mut app = self.pending_rx_acknowledgements.drain(0..take).collect();
-                let mut ack_buf = self.tx_buf_acknowledgements.clone();
+                let take = usize::min(usize::min(16, n), self.pending_rx_acknowledgments.len());
+                let mut app = self.pending_rx_acknowledgments.drain(0..take).collect();
+                let mut ack_buf = self.tx_buf_acknowledgments.clone();
                 ack_buf.append(&mut app);
-                // Note: It might be possible to optimize a little bit more the number of acknowledgements by frame. Nonetheless, there is several parameters
+                // Note: It might be possible to optimize a little bit more the number of acknowledgments by frame. Nonetheless, there is several parameters
                 // that intervene on the size of the packet: number of recipients, the number of messages received by minute, etc.. Therefore, while it might
                 // not be optimal, I'm not sure if those particular optimizations could result in significant improvements for the complexity they add.
                 match self.build_frame(&self.tx_buffer, &ack_buf) {
                     Ok(frame) => {
-                        self.tx_buf_acknowledgements = ack_buf;
+                        self.tx_buf_acknowledgments = ack_buf;
                         self.tx_frame = Some(frame);
                         Ok(true)
                     }
@@ -414,8 +413,8 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                 }
             } else {
                 Err(QueueError::QueueFullError(
-                    RadioError::TooManyAcknowledgementsError {
-                        count: 16 + self.pending_rx_acknowledgements.len(),
+                    RadioError::TooManyAcknowledgmentsError {
+                        count: 16 + self.pending_rx_acknowledgments.len(),
                     },
                 ))
             }
@@ -467,7 +466,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
             dest: recipients,
             payload: payload.to_owned(),
         });
-        match self.build_frame(&buf, &self.tx_buf_acknowledgements) {
+        match self.build_frame(&buf, &self.tx_buf_acknowledgments) {
             Ok(frame) => {
                 self.tx_buffer = buf;
                 self.tx_frame = Some(frame);
@@ -567,11 +566,11 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
         }
         println!("Clearing queue, acknowledging the transmission to API client");
 
-        self.tx_history.push(frame.clone());
+        let _ = self.tx_history.push(frame.clone());
         match frame.headers.recipients {
             // Do not require acknowledgment for GLOBAL as we do not want a retransmission.
             RecipientHeader::Direct(ah) if ah.get_acknowledgment() && !ah.is_global() => {
-                self.pending_tx_acknowledgements.push((
+                let _ = self.pending_tx_acknowledgments.push((
                     ah.clone(),
                     frame.headers.nonce.clone(),
                     last.clone(),
@@ -586,7 +585,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                         // by another recipient, therefore we should only update the recipients with the highest threshold.
                         let should_update =
                             atpc_farest_peers.binary_search(&ah.get_address()).is_ok();
-                        self.pending_tx_acknowledgements.push((
+                        let _ = self.pending_tx_acknowledgments.push((
                             ah.clone(),
                             frame.headers.nonce.clone(),
                             last.clone(),
@@ -595,13 +594,13 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                     }
                 }
             }
-            _ => { /* No acknowledgement requested */ }
+            _ => { /* No acknowledgment requested */ }
         }
         self.tx_frame = None;
         self.tx_buffer.clear();
-        self.tx_buf_acknowledgements.clear();
+        self.tx_buf_acknowledgments.clear();
         if let Some(client) = &self.tx_client {
-            client.transmission_done(nonce); // TODO: Error silenced here!
+            let _ = client.transmission_done(nonce); // TODO: Error silenced here!
         }
         Ok(nonce)
     }
@@ -618,11 +617,11 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
     }
 
     fn check_reception(&mut self) -> Result<bool, Self::DeviceError> {
-        info!("Checking missing acknowledgement...");
-        let mut next = self.pending_tx_acknowledgements.pop();
+        info!("Checking missing acknowledgment...");
+        let mut next = self.pending_tx_acknowledgments.pop();
         while let Some((ah, nonce, instant, update_atpc)) = next {
             if instant.elapsed() < Duration::from_secs(60) {
-                let _ = self.pending_tx_acknowledgements.push_overwrite((
+                let _ = self.pending_tx_acknowledgments.push_overwrite((
                     ah,
                     nonce,
                     instant,
@@ -640,7 +639,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                     frame_ = self.tx_history.pop();
                 }
                 if let Some(frame) = frame_ {
-                    self.tx_history.push(frame.clone());
+                    let _ = self.tx_history.push(frame.clone());
                     match &frame.headers.recipients {
                         RecipientHeader::Direct(ah2) if ah.get_address() == ah2.get_address() => {
                             for pl in frame.payloads {
@@ -670,7 +669,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                     }
                 }
             }
-            next = self.pending_tx_acknowledgements.pop();
+            next = self.pending_tx_acknowledgments.pop();
         }
         info!("checking_reception...");
         if self
@@ -800,7 +799,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
         // Check channel availability
         println!("Channel check");
         self.transmission_check(1)?;
-        let mut last = Instant::now();
+        let mut last;
 
         let powers = self.atpc.get_beacon_powers();
 
@@ -843,7 +842,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                 self.radio.delay_ms(delay);
             }
             self.channel_usages[0] = (last.clone(), consumed);
-            self.tx_history.push(frame.clone());
+            let _ = self.tx_history.push(frame.clone());
         }
         Ok(())
     }
@@ -911,7 +910,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, A, T, C, E> 
         info!("Handling reception of an incoming frame.");
         let (frame, _length) = RadioFrameWithHeaders::try_from_bytes(msg.as_slice())?;
         if let Some(tx_client) = &self.tx_client {
-            for (ah, nonce, drssi) in frame.acknowledgements {
+            for (ah, nonce, drssi) in frame.acknowledgments {
                 if ah.get_address() == self.address {
                     println!("DEBUG: Peer {} acknowledged the reception of message {} with a DRSSI of {} dBm", frame.headers.sender.get_address(), nonce.clone(), drssi.clone());
                     // ATPC: Report the successful reception of a frame by a peer.
@@ -939,7 +938,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, A, T, C, E> 
                         ); // TODO: Error silenced here!
                     }
                     if ah.get_acknowledgment() {
-                        let _ = self.pending_rx_acknowledgements.push((
+                        let _ = self.pending_rx_acknowledgments.push((
                             frame.headers.sender.clone(),
                             frame.headers.nonce,
                             drssi,
@@ -972,7 +971,7 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, A, T, C, E> 
                             ); // TODO: Error silenced here!
                         }
                         if ah.get_acknowledgment() {
-                            let _ = self.pending_rx_acknowledgements.push((
+                            let _ = self.pending_rx_acknowledgments.push((
                                 frame.headers.sender.clone(),
                                 frame.headers.nonce,
                                 drssi,
@@ -1013,13 +1012,13 @@ where
     #[error("Frame is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_FRAME_LENGTH)]
     TooBigFrameError { size: usize },
 
-    /// First frame (containing headers and acknowledgements) is too big to be transmitted.
-    #[error("First frame (containing headers and acknowledgements) is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_LORA_PAYLOAD)]
+    /// First frame (containing headers and acknowledgments) is too big to be transmitted.
+    #[error("First frame (containing headers and acknowledgments) is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_LORA_PAYLOAD)]
     TooBigFirstFrameError { size: usize },
 
-    /// Frame contains too much acknowledgements (more than 16) in one frame.
-    #[error("Frame contains too much acknowledgements in one frame (is: {}, max: 16)!", .count)]
-    TooManyAcknowledgementsError { count: usize },
+    /// Frame contains too much acknowledgments (more than 16) in one frame.
+    #[error("Frame contains too much acknowledgments in one frame (is: {}, max: 16)!", .count)]
+    TooManyAcknowledgmentsError { count: usize },
 
     /// Device failed to respect the sync interval.
     ///
