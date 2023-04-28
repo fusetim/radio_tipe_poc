@@ -92,10 +92,10 @@ pub trait Device<'a> {
         ack: bool,
     ) -> Result<(), QueueError<Self::DeviceError>>;
 
-    // Informs the application that the ATPC/radio would like to send beacons.
+    /// Informs the application that the ATPC/radio would like to send beacons.
     fn is_beacon_needed(&mut self) -> bool;
 
-    // Force the radio to send ATPC beacons.
+    /// Forces the radio to send ATPC beacons.
     fn transmit_beacon(&mut self) -> Result<(), QueueError<Self::DeviceError>>;
 }
 

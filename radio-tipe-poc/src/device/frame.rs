@@ -1,23 +1,28 @@
 //! Frame description, utilities and helpers.
 
+/// Discriminant for a frame.
 pub enum FrameType {
+    /// A *simple* message.
     Message = 0,
 //    Acknowledgment = 1, - DEPRECATED
 //    RelayAnnouncement = 2,
 //    RelayAnnouncementAcknowledgment = 3, - DEPRECATED
 //    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
 //    RelayAcknowledgment = 5, // Use the same Frame template as Acknowledgment, just a different FrameType. - DEPRECATED
+    /// A beacon message, that can be safely ignored.
     BroadcastCheckSignal = 6,
 //  BroadcastCheckSignalReply = 7,
 }
 
 /// Trait to calculate size on frame for every component on frame.
 pub trait FrameSize {
-    /// Calculate compenent size on frame (meaning encoded) in bytes.
+    /// Calculates component size on frame (meaning encoded) in bytes.
     fn size(&self) -> usize;
 }
 
+/// Type alias for a frame nonce.
 pub type FrameNonce = u64;
+/// The constant size of a frame nonce.
 const FRAME_NONCE_SIZE : usize = 8;
 
 /// Radio header representation.
@@ -53,6 +58,7 @@ pub struct RadioFrameWithHeaders {
     pub payloads: Vec<Payload>,
 }
 
+/// Type alias for a frame body (or frame).
 pub type RadioFrame = Vec<Payload>;
 
 /// Compact representation of recipient number and frame number.
@@ -76,9 +82,11 @@ pub struct AddressHeader(u16);
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct PayloadFlag(u16);
 
+/// Type alias for a payload (a simple byte sequence).
 pub(crate) type Payload = Vec<u8>;
 
 impl InfoHeader {
+    /// Builds an info header from scratch.
     pub fn new(recipients: u8, frames: u8) -> Self {
         let mut inner = 0u8;
         inner += (recipients << 4) & 0b11110000;
@@ -86,6 +94,7 @@ impl InfoHeader {
         return InfoHeader(inner);
     }
 
+    /// Sets the number of recipient of a frame.
     pub fn set_recipients(&mut self, recipients: u8) -> Self {
         let mut inner = 0u8;
         inner += (recipients << 4) & 0b11110000;
@@ -94,6 +103,7 @@ impl InfoHeader {
         *self
     }
 
+    /// Sets the number of parts (or physical frames) of a frame.
     pub fn set_frames(&mut self, frames: u8) -> Self {
         let mut inner = 0u8;
         inner += self.0 & 0b11110000;
@@ -102,21 +112,28 @@ impl InfoHeader {
         *self
     }
 
+    /// Gets the number of recipients of a frame.
     pub fn get_recipients(&self) -> u8 {
         ((self.0) >> 4) & 0b00001111
     }
 
+    /// Gets the number of frame part (or physical frames) of a frame. 
     pub fn get_frames(&self) -> u8 {
         self.0 & 0b00001111
     }
 }
 
-pub const GLOBAL_ACKNOWLEDGMENT: u16 = 0b1111_1111_1111_1111;
-pub const GLOBAL_NO_ACKNOWLEDGMENT: u16 = 0b0111_1111_1111_1111;
-pub const ADDRESS_BITMASK: u16 = 0b0111_1111_1111_1111;
-pub const ACKNOWLEDGMENT_BITMASK: u16 = 0b1000_0000_0000_0000;
+/// Special address reserved for a Global message with Acknowledgment.
+pub(crate) const GLOBAL_ACKNOWLEDGMENT: u16 = 0b1111_1111_1111_1111;
+/// Special address reserved for a Global message without Acknowledgment.
+pub(crate) const GLOBAL_NO_ACKNOWLEDGMENT: u16 = 0b0111_1111_1111_1111;
+/// Bit mask of the address part of an [LoRaAddress](crate::LoRaAddress).
+pub(crate) const ADDRESS_BITMASK: u16 = 0b0111_1111_1111_1111;
+/// Bit mask of the acknowlegment part of an [LoRaAddress](crate::LoRaAddress).
+pub(crate) const ACKNOWLEDGMENT_BITMASK: u16 = 0b1000_0000_0000_0000;
 
 impl AddressHeader {
+    /// Builds an address header from scratch.
     pub fn new(addr: u16, ack: bool) -> Self {
         let mut inner = addr & ADDRESS_BITMASK;
         if ack {
@@ -125,6 +142,7 @@ impl AddressHeader {
         Self(inner)
     }
 
+    /// Builds a *global* address header from scratch.
     pub fn new_global(ack: bool) -> Self {
         if ack {
             Self(GLOBAL_ACKNOWLEDGMENT)
@@ -133,6 +151,7 @@ impl AddressHeader {
         }
     }
 
+    /// Sets the acknowlegment bit for an address.
     pub fn set_acknowledgment(&mut self, ack: bool) -> Self {
         let mut inner = self.0 & ADDRESS_BITMASK;
         if ack {
@@ -142,6 +161,7 @@ impl AddressHeader {
         *self
     }
 
+    /// Sets the address part of an address header.
     pub fn set_address(&mut self, addr: u16) -> Self {
         let mut inner = addr & ADDRESS_BITMASK;
         inner |= self.0 & ACKNOWLEDGMENT_BITMASK;
@@ -149,24 +169,32 @@ impl AddressHeader {
         *self
     }
 
+    /// Sets the address part of an address header to the global address.
     pub fn set_global(&mut self) -> Self {
         self.set_address(GLOBAL_NO_ACKNOWLEDGMENT)
     }
 
+    /// Gets the acknowledgment bit of the address header.
+    ///
+    /// True means an acknowledgment is expected.
     pub fn get_acknowledgment(&self) -> bool {
         (self.0 & ACKNOWLEDGMENT_BITMASK) == ACKNOWLEDGMENT_BITMASK
     }
 
+    /// Gets the address part of an address header.
     pub fn get_address(&self) -> u16 {
         self.0 & ADDRESS_BITMASK
     }
 
+    /// Is this header's address global.
     pub fn is_global(&self) -> bool {
         (self.get_address() & ADDRESS_BITMASK) == GLOBAL_NO_ACKNOWLEDGMENT
     }
 }
 
 impl PayloadFlag {
+    /// Builds a payload flag from scratch.
+    ///
     /// Message ID should be included in 0..16 (16 excluded) in the slice.
     pub fn new(message_ids: &[u8]) -> Self {
         let mut inner = 0u16;
@@ -176,10 +204,12 @@ impl PayloadFlag {
         Self(inner)
     }
 
+    /// Pushes a new message id into the payload flag.
     pub fn push(&mut self, id: u8) {
         self.0 |= 1 << id;
     }
 
+    /// Converts the payload flag to a list of message indexes.
     pub fn to_message_ids(&self) -> Vec<u8> {
         let mut ids = Vec::new();
         for i in 0..16 {
@@ -231,6 +261,7 @@ impl Into<u8> for InfoHeader {
 }
 
 impl<'a> RecipientHeader {
+    /// Builds the byte/network representation of this recipient header.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         match self {
@@ -251,6 +282,8 @@ impl<'a> RecipientHeader {
         }
         bytes
     }
+
+    /// Builds from a byte/network representation a new recipient header.
     pub fn try_from_bytes(bytes: &'a [u8]) -> Result<(Self, usize), FrameError> {
         if bytes.len() < 1 {
             return Err(FrameError::InvalidHeader {
@@ -304,6 +337,7 @@ impl<'a> RecipientHeader {
 }
 
 impl RadioHeaders {
+    /// Builds the byte/network representation of these radio headers.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         let rnt_raw: u8 = self.rec_n_frames.into();
@@ -317,6 +351,7 @@ impl RadioHeaders {
         bytes
     }
 
+    /// Builds the radio headers from a byte/network representation.
     pub fn try_from_bytes<'a>(bytes: &'a [u8]) -> Result<(Self, usize), FrameError> {
         if bytes.len() < 1 {
             return Err(FrameError::InvalidHeader {
@@ -364,6 +399,7 @@ impl RadioHeaders {
 }
 
 impl RadioFrameWithHeaders {
+    /// Builds the byte/network representation of this entire frame with its headers.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = self.headers.to_bytes();
         // Headers
@@ -391,6 +427,7 @@ impl RadioFrameWithHeaders {
         bytes
     }
 
+    /// Builds a radio frame and its headers from its byte/network representation.
     pub fn try_from_bytes<'a>(bytes: &'a [u8]) -> Result<(Self, usize), FrameError> {
         let (headers, read) = RadioHeaders::try_from_bytes(bytes)?;
         let mut cursor = read;
@@ -441,11 +478,15 @@ impl RadioFrameWithHeaders {
     }
 }
 
+/// Represents an error due to an invalid construction or deserialization of a primitive frame 
+/// components.
 #[derive(thiserror::Error, Debug)]
 pub enum FrameError {
+    /// The current frame component cannot be build due to an invalid header.
     #[error("Invalid header. Context: {}", .context.as_ref().unwrap_or(&"<none>".to_owned()))]
     InvalidHeader { context: Option<String> },
 
+    /// Unknown frame error.
     #[error("Unknown frame error. Context: {}", context)]
     Unknown { context: String },
 }

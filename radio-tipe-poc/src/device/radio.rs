@@ -1,3 +1,10 @@
+//! The radio device implementation for a SX127x radio.
+//!
+//! This is the peripheral you will need to build using [LoRaRadio::new]
+//! and initialized in order to use the protocol. Most of the time, you 
+//! will be able to rely only on the [Device] implementation to operate 
+//! the radio and exchange frames on the network.
+
 use embedded_hal::blocking::delay::{DelayMs, DelayUs};
 use radio::{Interrupts, Power, Receive, State, Transmit, ReceiveInfo};
 use std::collections::HashMap;
@@ -23,8 +30,18 @@ use frame::{FrameSize, FrameType, RadioHeaders, RadioFrameWithHeaders, Recipient
 
 use super::atpc::ATPC;
 
+/// Maximum length of a frame.
+///
+/// Currently 5 times the [MAX_LORA_PAYLOAD] length.
 const MAX_FRAME_LENGTH: usize = MAX_LORA_PAYLOAD * 5;
+/// Maximum usable length of a LoRa payload (or physical frame).
+///
+/// Currently, 254-1. One bit is reserved for the [FrameType] discriminant.
 const MAX_LORA_PAYLOAD: usize = 253;
+/// Maximum number of checks to do on a channel. 
+///
+/// If after [MAX_ATTEMPT_FREE_CHANNEL] is still not free, the [LoRaRadio] will report
+/// an error [RadioError::BusyChannel].
 const MAX_ATTEMPT_FREE_CHANNEL: usize = 25; // A try = 200ms wait
 
 /// Channel representation of legal regulations on the use of electromagnetic bands.
@@ -33,10 +50,18 @@ const MAX_ATTEMPT_FREE_CHANNEL: usize = 25; // A try = 200ms wait
 /// minimum delay between transmission and poll.
 #[derive(Debug, Copy, Clone)]
 pub struct DelayParams {
+    /// Duty cycle: usage ratio of the frequencies. 
+    ///
+    /// The most frequent duty cycle is 1% (0.01), but please refer to your local regulations.
     pub duty_cycle: f64,
-    pub min_delay: u64,     //us
-    pub poll_delay: u64,    //us
-    pub duty_interval: u64, //us
+    /// Minimal delay between two transmissions (in ms).
+    pub min_delay: u64,     
+    /// Poll delay, the delay between two checks on the transmission by the physical radio.
+    pub poll_delay: u64,    
+    /// Duty interval, the time period on which the duty cycle is defined.
+    ///
+    /// For instance your country might regulate transmission as 1% by hour.
+    pub duty_interval: u64, 
 }
 
 /// Channel super-representation, including the specific Lora Channel to use on the device and its
@@ -46,23 +71,19 @@ pub struct Channel<C>
 where
     C: Debug,
 {
+    /// The physical radio channel representation.
     pub radio_channel: C,
+    /// The associated delay parameters to respect regulations.
     pub delay: DelayParams,
 }
 
+/// Type alias of the radio internal state.
 type RadioState = radio_sx127x::device::State;
 
 /// Radio physical device representation.
 //
 // TODO: Remove dependencies to radio_sx127x, using a generic trait with the companion types specifying
 // the HAL-specific interfaces.
-/*
-pub trait RadioHal {
-    type PacketInfo;
-    type State;
-    type Irq;
-}
-*/
 pub trait Radio<C, E>:
     Transmit<Error = E>
     + Receive<Info = radio_sx127x::device::PacketInfo, Error = E>
@@ -98,19 +119,42 @@ where
     C: Debug,
     E: Debug,
 {
+    /// The physical radio peripheral.
     radio: T,
+    /// The radio channels configured for uses.
     channels: &'a [Channel<C>],
+    /// Internal usage history of each channel, in order to respect regulations.
     channel_usages: Vec<(Instant, Duration)>,
+    /// RSSI target, an RSSI level that allows good reception by the physical radio.
     rssi_target: i16,
+    /// The ATPC to use.
     atpc: A,
+    /// The (optional) reception client to which the radio acknowledges receptions.
     rx_client: Option<Box<dyn RxClient>>,
+    /// The (optional) transmission client to which the radio acknowledges transmissions.
     tx_client: Option<Box<dyn TxClient>>,
+    /// Internal queue of messages to transmit.
     tx_buffer: Vec<LoRaMessage>,
+    /// Internal queue of acknowledgment to transmit.
     tx_buf_acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
+    /// Internal intermediate frame to transmit.
     tx_frame: Option<frame::RadioFrameWithHeaders>,
+    /// Internal history of transmissions (to allow retransmissions).
     tx_history: HeapRb<frame::RadioFrameWithHeaders>,
+    /// Internal queue of pending acknowledgment to transmit.
     pending_rx_acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
+    /// Internal list of awaiting acknowledgments. 
+    ///
+    /// Each item represents a tuple of the recipient address, the nonce of the associated frame,
+    /// the instant it was sent and finally a boolean indicating if this acknowledgment should 
+    /// update the ATPC.
+    ///
+    /// This last item is particularly useful when a frame is intended for more than one recipient
+    /// and they do not share the same level of transmission power.
     pending_tx_acknowledgements: HeapRb<(AddressHeader, FrameNonce, Instant, bool)>,
+    /// The radio address. 
+    ///
+    /// It defines what frames the radio will listen to.
     address: LoRaAddress,
     phantom: PhantomData<E>,
 }
@@ -157,6 +201,10 @@ where
         }
     }
 
+    /// Builds an internal frame representation based on a buffer of messages and a buffer 
+    /// of acknowledgments.
+    ///
+    /// This function might return an error if the frame exceeds the [MAX_FRAME_LENGTH] length.
     fn build_frame(
         &self,
         buffer: &Vec<LoRaMessage>,
@@ -164,6 +212,7 @@ where
     ) -> Result<frame::RadioFrameWithHeaders, RadioError<E>> {
         let mut recipients: HashMap<frame::AddressHeader, frame::PayloadFlag> = HashMap::new();
         let mut payloads: Vec<frame::Payload> = Vec::new();
+        // Builds the payload list and associated recipient list.
         for (id, msg) in buffer.iter().enumerate() {
             for rec in &msg.dest {
                 if let Some(prev) = recipients.get_mut(&(*rec).into()) {
@@ -174,11 +223,13 @@ where
             }
             payloads.push(msg.payload.clone());
         }
+        /// Builds the acknowledgment list and the associated recipient list.
         for (ah, _nonce, _drssi) in tx_buf_acknowledgements {
             if let None = recipients.get_mut(&(*ah).into()) {
                 recipients.insert((*ah).into(), frame::PayloadFlag::new(&[]));
             }
         }
+        /// Builds the frame based on the number of recipients.
         match recipients.len() {
             0 => Err(RadioError::InvalidRecipentsError {
                 context: format!("No registered recipient!"),
@@ -812,47 +863,66 @@ struct LoRaMessage {
     payload: Vec<u8>,
 }
 
+/// Error representation of either IO or Frame serialization errors.
 #[derive(thiserror::Error, Debug)]
 pub enum RadioError<R>
 where
     R: Debug,
 {
+    /// Frame is too big to be transmitted.
     #[error("Frame is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_FRAME_LENGTH)]
     TooBigFrameError { size: usize },
 
+    /// First frame (containing headers and acknowledgements) is too big to be transmitted.
     #[error("First frame (containing headers and acknowledgements) is too big to be transmitted (is: {}B, max: {}B)!", .size, MAX_LORA_PAYLOAD)]
     TooBigFirstFrameError { size: usize },
 
+    /// Frame contains too much acknowledgements (more than 16) in one frame.
     #[error("Frame contains too much acknowledgements in one frame (is: {}, max: 16)!", .count)]
     TooManyAcknowledgementsError { count: usize },
 
+    /// Device failed to respect the sync interval.
+    ///
+    /// This means the radio transmitted one or more physical frames but the radio failed to respect 
+    /// the timing of an entire frame transmission.
     #[error("Device failed to respect the sync interval.\nContext: {}", .context)]
     OutOfSync { context: String },
 
+    /// Invalid recipients error.
+    ///
+    /// It might suggest there is too many or 0 recipients or than one address is invalid.
     #[error("Invalid recipients error, might suggest there is too many or 0 recipients. One recipient might be an invalid address.\nContext: {}", .context)]
     InvalidRecipentsError { context: String },
 
+    /// Bad frame error. See [FrameError](frame::FrameError) for more context.
     #[error("Bad frame error.")]
     FrameError(#[from] frame::FrameError),
 
+    /// Underlying I/O Error.
     #[error("Underlying I/O Error.")]
     IoError(#[from] std::io::Error),
 
+    /// Busy device. The radio did not answer our requests before timeout.
     #[error("Busy device.")]
     BusyDevice,
 
+    /// Busy channel. One or more channel (that are needed for the transmission) is currently busy.
     #[error("Busy channel")]
     BusyChannel,
 
+    /// One or more channel has consumed all of their dutycycle.
     #[error("One or more channel has consumed all of their dutycycle. Need to wait...")]
     DutyCycleConsumed,
 
+    /// Minimum delay for one or more channel are not entirely elapsed.
     #[error("Minimum delay for one or more channel are not entirely elapsed. Need to wait...")]
     MinChannelDelayError,
 
+    /// Internal radio error.
     #[error("Internal radio error.")]
     InternalRadioError(/*#[source]*/ R),
 
+    /// Unknown/Unspecified radio error.
     #[error("Unknown radio error. Context: {}", .context)]
     Unknown { context: String },
 }
