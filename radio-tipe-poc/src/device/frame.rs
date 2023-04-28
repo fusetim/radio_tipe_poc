@@ -4,14 +4,14 @@
 pub enum FrameType {
     /// A *simple* message.
     Message = 0,
-//    Acknowledgment = 1, - DEPRECATED
-//    RelayAnnouncement = 2,
-//    RelayAnnouncementAcknowledgment = 3, - DEPRECATED
-//    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
-//    RelayAcknowledgment = 5, // Use the same Frame template as Acknowledgment, just a different FrameType. - DEPRECATED
+    //    Acknowledgment = 1, - DEPRECATED
+    //    RelayAnnouncement = 2,
+    //    RelayAnnouncementAcknowledgment = 3, - DEPRECATED
+    //    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
+    //    RelayAcknowledgment = 5, // Use the same Frame template as Acknowledgment, just a different FrameType. - DEPRECATED
     /// A beacon message, that can be safely ignored.
     BroadcastCheckSignal = 6,
-//  BroadcastCheckSignalReply = 7,
+    //  BroadcastCheckSignalReply = 7,
 }
 
 /// Trait to calculate size on frame for every component on frame.
@@ -23,7 +23,7 @@ pub trait FrameSize {
 /// Type alias for a frame nonce.
 pub type FrameNonce = u64;
 /// The constant size of a frame nonce.
-const FRAME_NONCE_SIZE : usize = 8;
+const FRAME_NONCE_SIZE: usize = 8;
 
 /// Radio header representation.
 #[derive(Clone, Debug)]
@@ -37,7 +37,7 @@ pub struct RadioHeaders {
     /// Sender address
     pub sender: AddressHeader,
     /// TODO / PROPOSAL / SECURITY : use timestamp + 16 random bits
-    /// 
+    ///
     /// Nonce MUST follow a total order.
     pub nonce: FrameNonce,
     // TODO / PROPOSAL / SECURITY : add frame signature (64 bytes for Ed25519)
@@ -51,7 +51,7 @@ pub struct RadioFrameWithHeaders {
     pub headers: RadioHeaders,
     /// Frame acknowledgement (to allow a node to acknowledge messages that it previously received)
     ///
-    /// Note the last element being the RSSI delta between what the sender RSSI wanted and the RSSI of the recieved 
+    /// Note the last element being the RSSI delta between what the sender RSSI wanted and the RSSI of the recieved
     /// packet.
     pub acknowledgements: Vec<(AddressHeader, FrameNonce, i16)>,
     /// Frame payloads
@@ -117,7 +117,7 @@ impl InfoHeader {
         ((self.0) >> 4) & 0b00001111
     }
 
-    /// Gets the number of frame part (or physical frames) of a frame. 
+    /// Gets the number of frame part (or physical frames) of a frame.
     pub fn get_frames(&self) -> u8 {
         self.0 & 0b00001111
     }
@@ -376,12 +376,12 @@ impl RadioHeaders {
             });
         };
         let payloads = u8::from_be(bytes[read + 3]);
-        
+
         if bytes.len() < read + 4 + FRAME_NONCE_SIZE {
             return Err(FrameError::InvalidHeader {
                 context: Some(format!("Badly formatted frame, missing nonce!")),
             });
-        };        
+        };
         let mut nonce_raw = [0u8; FRAME_NONCE_SIZE];
         nonce_raw.copy_from_slice(&bytes[(read + 4)..(read + 4 + FRAME_NONCE_SIZE)]);
         let nonce = u64::from_be_bytes(nonce_raw);
@@ -434,9 +434,10 @@ impl RadioFrameWithHeaders {
         let mut payloads = Vec::new();
         let mut acknowledgements = Vec::new();
         let ack_size = u8::from_be(bytes[cursor]);
-        cursor+=1;
+        cursor += 1;
         for _i in 0..(ack_size as usize) {
-            if bytes.len() < cursor + 2 + FRAME_NONCE_SIZE { // TODO: Remove hardcoded constante!!
+            if bytes.len() < cursor + 2 + FRAME_NONCE_SIZE {
+                // TODO: Remove hardcoded constante!!
                 return Err(FrameError::InvalidHeader {
                     context: Some(format!("Fail to read acknowledgement at byte {}!", cursor)),
                 });
@@ -448,11 +449,13 @@ impl RadioFrameWithHeaders {
             nonce_raw.copy_from_slice(&bytes[(cursor + 2)..(cursor + 2 + FRAME_NONCE_SIZE)]);
             let nonce = u64::from_be_bytes(nonce_raw);
             let mut drssi_raw = [0u8; 2];
-            drssi_raw.copy_from_slice(&bytes[(cursor + 2 + FRAME_NONCE_SIZE)..(cursor + 2 + FRAME_NONCE_SIZE + 2)]);
+            drssi_raw.copy_from_slice(
+                &bytes[(cursor + 2 + FRAME_NONCE_SIZE)..(cursor + 2 + FRAME_NONCE_SIZE + 2)],
+            );
             let drssi = i16::from_be_bytes(drssi_raw);
             acknowledgements.push((ah, nonce, drssi));
             cursor += 2 + FRAME_NONCE_SIZE + 2;
-        }   
+        }
         for _i in 0..(headers.payloads as usize) {
             if bytes.len() < cursor {
                 return Err(FrameError::InvalidHeader {
@@ -474,11 +477,18 @@ impl RadioFrameWithHeaders {
             cursor = cursor + 2 + len;
             payloads.push(payload);
         }
-        Ok((RadioFrameWithHeaders { headers, acknowledgements, payloads }, cursor))
+        Ok((
+            RadioFrameWithHeaders {
+                headers,
+                acknowledgements,
+                payloads,
+            },
+            cursor,
+        ))
     }
 }
 
-/// Represents an error due to an invalid construction or deserialization of a primitive frame 
+/// Represents an error due to an invalid construction or deserialization of a primitive frame
 /// components.
 #[derive(thiserror::Error, Debug)]
 pub enum FrameError {
@@ -539,7 +549,6 @@ impl FrameSize for Vec<(AddressHeader, FrameNonce, i16)> {
     }
 }
 
-
 impl FrameSize for RadioHeaders {
     fn size(&self) -> usize {
         self.rec_n_frames.size()
@@ -559,7 +568,7 @@ impl FrameSize for RadioFrameWithHeaders {
 impl FrameSize for RecipientHeader {
     fn size(&self) -> usize {
         match self {
-            RecipientHeader::Direct(addr) => 1+addr.size(),
+            RecipientHeader::Direct(addr) => 1 + addr.size(),
             RecipientHeader::Group(addrs) => addrs
                 .into_iter()
                 .fold(1, |acc, (addr, pf)| acc + addr.size() + pf.size()),
@@ -574,43 +583,113 @@ mod tests {
     #[test]
     fn frame_encode_info_header() {
         let ih1 = InfoHeader::new(0, 0);
-        assert!(ih1.0 == 0b0000_0000, "Failed to initialize an empty InfoHeader, got: {:b}, expect {:b}", ih1.0, 0b0000_0000);
+        assert!(
+            ih1.0 == 0b0000_0000,
+            "Failed to initialize an empty InfoHeader, got: {:b}, expect {:b}",
+            ih1.0,
+            0b0000_0000
+        );
 
         let ih2 = InfoHeader::new(15, 0);
-        assert!(ih2.0 == 0b1111_0000, "Failed to initialize an InfoHeader with 15 recipients, got: {:b}, expect {:b}", ih2.0, 0b1111_0000);
+        assert!(
+            ih2.0 == 0b1111_0000,
+            "Failed to initialize an InfoHeader with 15 recipients, got: {:b}, expect {:b}",
+            ih2.0,
+            0b1111_0000
+        );
 
-        let ih3 = InfoHeader::new(0,5);
-        assert!(ih3.0 == 0b0000_0101, "Failed to initialize an InfoHeader with 5 frames, got: {:b}, expect {:b}", ih3.0, 0b0000_0101);
+        let ih3 = InfoHeader::new(0, 5);
+        assert!(
+            ih3.0 == 0b0000_0101,
+            "Failed to initialize an InfoHeader with 5 frames, got: {:b}, expect {:b}",
+            ih3.0,
+            0b0000_0101
+        );
 
         let ih4 = InfoHeader::new(12, 3);
         assert!(ih4.0 == 0b1100_0011, "Failed to initialize an InfoHeader with 12 recipients and 3 frames, got: {:b}, expect {:b}", ih4.0, 0b1100_0011);
 
         let mut ih5 = ih1.clone();
         ih5.set_recipients(12);
-        assert!(ih5.0 == 0b1100_0000, "Failed to edit an InfoHeader to 12 recipients, got: {:b}, expect {:b}", ih5.0, 0b1100_0000);
+        assert!(
+            ih5.0 == 0b1100_0000,
+            "Failed to edit an InfoHeader to 12 recipients, got: {:b}, expect {:b}",
+            ih5.0,
+            0b1100_0000
+        );
         ih5.set_frames(3);
-        assert!(ih5.0 == 0b1100_0011, "Failed to edit an InfoHeader to 12 recipients and 3 frames, got: {:b}, expect {:b}", ih5.0, 0b1100_0011);
+        assert!(
+            ih5.0 == 0b1100_0011,
+            "Failed to edit an InfoHeader to 12 recipients and 3 frames, got: {:b}, expect {:b}",
+            ih5.0,
+            0b1100_0011
+        );
         ih5.set_recipients(0);
-        assert!(ih5.0 == 0b0000_0011, "Failed to edit an InfoHeader to 0 recipients and 3 frames, got: {:b}, expect {:b}", ih5.0, 0b0000_0011);
+        assert!(
+            ih5.0 == 0b0000_0011,
+            "Failed to edit an InfoHeader to 0 recipients and 3 frames, got: {:b}, expect {:b}",
+            ih5.0,
+            0b0000_0011
+        );
     }
 
     #[test]
     fn frame_decode_info_header() {
         let ih1 = InfoHeader::new(0, 0);
-        assert!(ih1.get_recipients() == 0, "ih1::get_recipients() returned {} recipients while {} was expected!", ih1.get_recipients(), 0);
-        assert!(ih1.get_frames() == 0, "ih1::get_frames() returned {} frames while {} was expected!", ih1.get_frames(), 0);
+        assert!(
+            ih1.get_recipients() == 0,
+            "ih1::get_recipients() returned {} recipients while {} was expected!",
+            ih1.get_recipients(),
+            0
+        );
+        assert!(
+            ih1.get_frames() == 0,
+            "ih1::get_frames() returned {} frames while {} was expected!",
+            ih1.get_frames(),
+            0
+        );
 
         let ih2 = InfoHeader::new(15, 0);
-        assert!(ih2.get_recipients() == 15, "ih2::get_recipients() returned {} recipients while {} was expected!", ih2.get_recipients(), 15);
-        assert!(ih2.get_frames() == 0, "ih2::get_frames() returned {} frames while {} was expected!", ih2.get_frames(), 0);
+        assert!(
+            ih2.get_recipients() == 15,
+            "ih2::get_recipients() returned {} recipients while {} was expected!",
+            ih2.get_recipients(),
+            15
+        );
+        assert!(
+            ih2.get_frames() == 0,
+            "ih2::get_frames() returned {} frames while {} was expected!",
+            ih2.get_frames(),
+            0
+        );
 
-        let ih3 = InfoHeader::new(0,5);
-        assert!(ih3.get_recipients() == 0, "ih3::get_recipients() returned {} recipients while {} was expected!", ih3.get_recipients(), 0);
-        assert!(ih3.get_frames() == 5, "ih3::get_frames() returned {} frames while {} was expected!", ih3.get_frames(), 5);
+        let ih3 = InfoHeader::new(0, 5);
+        assert!(
+            ih3.get_recipients() == 0,
+            "ih3::get_recipients() returned {} recipients while {} was expected!",
+            ih3.get_recipients(),
+            0
+        );
+        assert!(
+            ih3.get_frames() == 5,
+            "ih3::get_frames() returned {} frames while {} was expected!",
+            ih3.get_frames(),
+            5
+        );
 
         let ih4 = InfoHeader::new(12, 3);
-        assert!(ih4.get_recipients() == 12, "ih4::get_recipients() returned {} recipients while {} was expected!", ih4.get_recipients(), 12);
-        assert!(ih4.get_frames() == 3, "ih4::get_frames() returned {} frames while {} was expected!", ih4.get_frames(), 3);
+        assert!(
+            ih4.get_recipients() == 12,
+            "ih4::get_recipients() returned {} recipients while {} was expected!",
+            ih4.get_recipients(),
+            12
+        );
+        assert!(
+            ih4.get_frames() == 3,
+            "ih4::get_frames() returned {} frames while {} was expected!",
+            ih4.get_frames(),
+            3
+        );
     }
 
     #[test]
@@ -619,11 +698,23 @@ mod tests {
         assert_eq!(ah1.0, GLOBAL_ACKNOWLEDGMENT);
         let ah2 = AddressHeader::new_global(false);
         assert_eq!(ah2.0, GLOBAL_NO_ACKNOWLEDGMENT);
-        assert!(ah1.is_global(), "ah1 is not recognized as a global address!");
-        assert!(ah2.is_global(), "ah2 is not recognized as a global address!");
+        assert!(
+            ah1.is_global(),
+            "ah1 is not recognized as a global address!"
+        );
+        assert!(
+            ah2.is_global(),
+            "ah2 is not recognized as a global address!"
+        );
 
-        assert!(ah1.get_acknowledgment(), "ah1 do not require acknowledgment while it does.");
-        assert!(!ah2.get_acknowledgment(), "ah2 requires an acknowledgment while it does not!");
+        assert!(
+            ah1.get_acknowledgment(),
+            "ah1 do not require acknowledgment while it does."
+        );
+        assert!(
+            !ah2.get_acknowledgment(),
+            "ah2 requires an acknowledgment while it does not!"
+        );
     }
 
     #[test]
@@ -631,24 +722,33 @@ mod tests {
         let ah1 = AddressHeader::new(0b0011111111111111, false);
         let ah2 = AddressHeader::new(0b1011111111111111, false);
         let ah3 = AddressHeader::new(0b0011111111111111, true);
-        assert_eq!(ah1.0, ah2.0, "AddressHeader should ignore acknowledgment flag on build!");
-        
+        assert_eq!(
+            ah1.0, ah2.0,
+            "AddressHeader should ignore acknowledgment flag on build!"
+        );
+
         assert!(!ah1.is_global(), "ah1 is recognized as a global address!");
         assert!(!ah2.is_global(), "ah2 is recognized as a global address!");
         assert!(!ah3.is_global(), "ah3 is recognized as a global address!");
 
-        assert!(!ah2.get_acknowledgment(), "ah2 requires an acknowledgment while it does not!");
-        assert!(ah3.get_acknowledgment(), "ah3 do not require acknowledgment while it does.");
+        assert!(
+            !ah2.get_acknowledgment(),
+            "ah2 requires an acknowledgment while it does not!"
+        );
+        assert!(
+            ah3.get_acknowledgment(),
+            "ah3 do not require acknowledgment while it does."
+        );
     }
 
     #[test]
     fn frame_accessor_address_header() {
         let ah1 = AddressHeader::new(0b0011111111111111, false);
-        let ah2 = AddressHeader::new(0b0011111111111111, true);      
+        let ah2 = AddressHeader::new(0b0011111111111111, true);
         let ah3 = AddressHeader::new(0b0000000000000000, false);
-        let ah4 = AddressHeader::new(0b0000000000000000, true);      
+        let ah4 = AddressHeader::new(0b0000000000000000, true);
         let ahg1 = AddressHeader::new_global(false);
-        let ahg2 = AddressHeader::new_global(true);        
+        let ahg2 = AddressHeader::new_global(true);
 
         // is_global
         assert!(!ah1.is_global(), "ah1 is not a global address!");
@@ -659,30 +759,72 @@ mod tests {
         assert!(ahg1.is_global(), "ahg2 is a global address!");
 
         // get_acknowledgment
-        assert!(!ah1.get_acknowledgment(), "ah1 does not require an acknowledgment!");
-        assert!(!ah3.get_acknowledgment(), "ah3 does not require an acknowledgment!");
-        assert!(!ahg1.get_acknowledgment(), "ahg1 does not require an acknowledgment!");
-        assert!(ah2.get_acknowledgment(),   "ah2 requires an acknowledgment!");
-        assert!(ah4.get_acknowledgment(),   "ah4 requires an acknowledgment!");
-        assert!(ahg2.get_acknowledgment(), "ahg2 requires an acknowledgment!");
+        assert!(
+            !ah1.get_acknowledgment(),
+            "ah1 does not require an acknowledgment!"
+        );
+        assert!(
+            !ah3.get_acknowledgment(),
+            "ah3 does not require an acknowledgment!"
+        );
+        assert!(
+            !ahg1.get_acknowledgment(),
+            "ahg1 does not require an acknowledgment!"
+        );
+        assert!(ah2.get_acknowledgment(), "ah2 requires an acknowledgment!");
+        assert!(ah4.get_acknowledgment(), "ah4 requires an acknowledgment!");
+        assert!(
+            ahg2.get_acknowledgment(),
+            "ahg2 requires an acknowledgment!"
+        );
 
         // get_address
-        assert!(ah1.get_address() == 0b0011111111111111, "ah1.get_address() returned {}, expected {}!", ah1.get_address(), 0b0011111111111111);
-        assert!(ah2.get_address() == 0b0011111111111111, "ah2.get_address() returned {}, expected {}!", ah2.get_address(), 0b0011111111111111);
-        assert!(ah3.get_address() == 0b0000000000000000, "ah2.get_address() returned {}, expected {}!", ah3.get_address(), 0b0000000000000000);
-        assert!(ah4.get_address() == 0b0000000000000000, "ah4.get_address() returned {}, expected {}!", ah4.get_address(), 0b0000000000000000);
-        assert!(ahg1.get_address() == GLOBAL_NO_ACKNOWLEDGMENT, "ahg1.get_address() returned {}, expected {}!", ahg1.get_address(), GLOBAL_NO_ACKNOWLEDGMENT);
-        assert!(ahg2.get_address() == GLOBAL_NO_ACKNOWLEDGMENT, "ahg2.get_address() returned {}, expected {}!", ahg2.get_address(), GLOBAL_NO_ACKNOWLEDGMENT);
+        assert!(
+            ah1.get_address() == 0b0011111111111111,
+            "ah1.get_address() returned {}, expected {}!",
+            ah1.get_address(),
+            0b0011111111111111
+        );
+        assert!(
+            ah2.get_address() == 0b0011111111111111,
+            "ah2.get_address() returned {}, expected {}!",
+            ah2.get_address(),
+            0b0011111111111111
+        );
+        assert!(
+            ah3.get_address() == 0b0000000000000000,
+            "ah2.get_address() returned {}, expected {}!",
+            ah3.get_address(),
+            0b0000000000000000
+        );
+        assert!(
+            ah4.get_address() == 0b0000000000000000,
+            "ah4.get_address() returned {}, expected {}!",
+            ah4.get_address(),
+            0b0000000000000000
+        );
+        assert!(
+            ahg1.get_address() == GLOBAL_NO_ACKNOWLEDGMENT,
+            "ahg1.get_address() returned {}, expected {}!",
+            ahg1.get_address(),
+            GLOBAL_NO_ACKNOWLEDGMENT
+        );
+        assert!(
+            ahg2.get_address() == GLOBAL_NO_ACKNOWLEDGMENT,
+            "ahg2.get_address() returned {}, expected {}!",
+            ahg2.get_address(),
+            GLOBAL_NO_ACKNOWLEDGMENT
+        );
     }
 
     #[test]
     fn frame_modifier_address_header() {
         let mut ah1 = AddressHeader::new(0b0000000000000000, false);
-        let mut ah2 = AddressHeader::new(0b0000000000000000, true);      
+        let mut ah2 = AddressHeader::new(0b0000000000000000, true);
         let mut ahg1 = AddressHeader::new_global(false);
-        let mut ahg2 = AddressHeader::new_global(true); 
-        
-        // set_acknowledgment 
+        let mut ahg2 = AddressHeader::new_global(true);
+
+        // set_acknowledgment
         ah1.set_acknowledgment(true);
         assert_eq!(ah1.0, ah2.0, "ah1.set_acknowledgment(true)");
         ah1.set_acknowledgment(false);
@@ -690,32 +832,47 @@ mod tests {
         ahg1.set_acknowledgment(true);
         assert_eq!(ahg1.0, ahg2.0, "ahg1.set_acknowledgment(true)");
         ahg1.set_acknowledgment(false);
-        assert_eq!(ahg1.0, GLOBAL_NO_ACKNOWLEDGMENT, "ahg1.set_acknowledgment(false)");
+        assert_eq!(
+            ahg1.0, GLOBAL_NO_ACKNOWLEDGMENT,
+            "ahg1.set_acknowledgment(false)"
+        );
 
         // set_address
         let mut ah1 = AddressHeader::new(0b0000000000000000, false);
         ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT);
-        assert_eq!(ah1.0, GLOBAL_NO_ACKNOWLEDGMENT, "ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT)");
+        assert_eq!(
+            ah1.0, GLOBAL_NO_ACKNOWLEDGMENT,
+            "ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT)"
+        );
         ah1.set_address(GLOBAL_ACKNOWLEDGMENT);
-        assert_eq!(ah1.0, GLOBAL_NO_ACKNOWLEDGMENT, "ah1.set_address(GLOBAL_ACKNOWLEDGMENT) should ignore the acknowledgment!");
+        assert_eq!(
+            ah1.0, GLOBAL_NO_ACKNOWLEDGMENT,
+            "ah1.set_address(GLOBAL_ACKNOWLEDGMENT) should ignore the acknowledgment!"
+        );
         ah1.set_acknowledgment(true);
         ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT);
-        assert_eq!(ah1.0, GLOBAL_ACKNOWLEDGMENT, "ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT) should ignore the acknowledgment!");
+        assert_eq!(
+            ah1.0, GLOBAL_ACKNOWLEDGMENT,
+            "ah1.set_address(GLOBAL_NO_ACKNOWLEDGMENT) should ignore the acknowledgment!"
+        );
         ah1.set_address(0b0000000000000000);
-        assert_eq!(ah1.0, 0b1000000000000000, "ah1.set_address(0b0000000000000000) should ignore the acknowledgment!");
+        assert_eq!(
+            ah1.0, 0b1000000000000000,
+            "ah1.set_address(0b0000000000000000) should ignore the acknowledgment!"
+        );
     }
 
     #[test]
     fn frame_encode_payload_flag() {
-        let pf1 = PayloadFlag::new(&[1,4,6,9,15]);
+        let pf1 = PayloadFlag::new(&[1, 4, 6, 9, 15]);
         assert_eq!(pf1.0, 0b1000_0010_0101_0010);
-        let pf2 = PayloadFlag::new(&[3,5,8,12,13]);
+        let pf2 = PayloadFlag::new(&[3, 5, 8, 12, 13]);
         assert_eq!(pf2.0, 0b0011_0001_0010_1000);
-        let pf3 = PayloadFlag::new(&[2,7,10,11,14]);
+        let pf3 = PayloadFlag::new(&[2, 7, 10, 11, 14]);
         assert_eq!(pf3.0, 0b0100_1100_1000_0100);
-        let pf4 = PayloadFlag::new(&[14,11,10,7,2]);
+        let pf4 = PayloadFlag::new(&[14, 11, 10, 7, 2]);
         assert_eq!(pf4.0, 0b0100_1100_1000_0100);
-        let mut pf5 = PayloadFlag::new(&[14,11,10,7,2]);
+        let mut pf5 = PayloadFlag::new(&[14, 11, 10, 7, 2]);
         pf5.push(3);
         pf5.push(5);
         pf5.push(12);
@@ -726,11 +883,11 @@ mod tests {
 
     #[test]
     fn frame_decode_payload_flag() {
-        let pf1 = PayloadFlag::new(&[0,1,4,6,9,15]);
-        let pf2 = PayloadFlag::new(&[3,5,8,12,13]);
-        let pf3 = PayloadFlag::new(&[2,7,10,11,14]);
-        let pf4 = PayloadFlag::new(&[14,11,10,7,2]);
-        
+        let pf1 = PayloadFlag::new(&[0, 1, 4, 6, 9, 15]);
+        let pf2 = PayloadFlag::new(&[3, 5, 8, 12, 13]);
+        let pf3 = PayloadFlag::new(&[2, 7, 10, 11, 14]);
+        let pf4 = PayloadFlag::new(&[14, 11, 10, 7, 2]);
+
         for k in 0..16 {
             match k {
                 0 | 1 | 4 | 6 | 9 | 15 => assert!(pf1.to_message_ids().contains(&k)),
@@ -738,12 +895,13 @@ mod tests {
                 2 | 7 | 10 | 11 | 14 => {
                     assert!(pf3.to_message_ids().contains(&k));
                     assert!(pf4.to_message_ids().contains(&k));
-                },
-                _ => {unreachable!()},
+                }
+                _ => {
+                    unreachable!()
+                }
             }
         }
     }
-
 
     #[test]
     fn frame_encode_simple_recipient_header() {
@@ -787,10 +945,10 @@ mod tests {
         let ah1 = AddressHeader::new(0b00000000_00000001, false);
         let ah2 = AddressHeader::new(0b00000000_00000010, true);
         let ah3 = AddressHeader::new_global(true);
-        let ph1 = PayloadFlag::new(&[0,2]);
-        let ph2 = PayloadFlag::new(&[1,3]);
-        let ph3 = PayloadFlag::new(&[15,13]);
-        let rh1 = RecipientHeader::Group(vec!((ah1,ph1), (ah2, ph2), (ah3, ph3)));
+        let ph1 = PayloadFlag::new(&[0, 2]);
+        let ph2 = PayloadFlag::new(&[1, 3]);
+        let ph3 = PayloadFlag::new(&[15, 13]);
+        let rh1 = RecipientHeader::Group(vec![(ah1, ph1), (ah2, ph2), (ah3, ph3)]);
         let rhb1 = rh1.to_bytes();
 
         let (rhd1, _) = RecipientHeader::try_from_bytes(&rhb1).expect("rhd1 failed parsing!");
@@ -799,9 +957,9 @@ mod tests {
                 assert_eq!(recs[0].0, ah1);
                 assert_eq!(recs[1].0, ah2);
                 assert_eq!(recs[2].0, ah3);
-                assert_eq!(recs[0].1, ph1, "got {:b}", recs[0].1.0);
-                assert_eq!(recs[1].1, ph2, "got {:b}", recs[1].1.0);
-                assert_eq!(recs[2].1, ph3, "got {:b}", recs[2].1.0);
+                assert_eq!(recs[0].1, ph1, "got {:b}", recs[0].1 .0);
+                assert_eq!(recs[1].1, ph2, "got {:b}", recs[1].1 .0);
+                assert_eq!(recs[2].1, ph3, "got {:b}", recs[2].1 .0);
             }
             _ => panic!("RecipientHeader is not group, got : {:?}", rhd1),
         }
@@ -812,10 +970,10 @@ mod tests {
         let ah1 = AddressHeader::new(0b00000000_00000001, false);
         let ah2 = AddressHeader::new(0b00000000_00000010, true);
         let ah3 = AddressHeader::new_global(true);
-        let ph1 = PayloadFlag::new(&[0,2]);
-        let ph2 = PayloadFlag::new(&[1,3]);
-        let ph3 = PayloadFlag::new(&[15,13]);
-        let rh1 = RecipientHeader::Group(vec!((ah1,ph1), (ah2, ph2), (ah3, ph3)));
+        let ph1 = PayloadFlag::new(&[0, 2]);
+        let ph2 = PayloadFlag::new(&[1, 3]);
+        let ph3 = PayloadFlag::new(&[15, 13]);
+        let rh1 = RecipientHeader::Group(vec![(ah1, ph1), (ah2, ph2), (ah3, ph3)]);
         let rhb1 = rh1.to_bytes();
         assert_eq!(rhb1[00], 0b0000_0011); // 3 recipient
         assert_eq!(rhb1[01], 0b0000_0000); // start of ah1
@@ -833,8 +991,8 @@ mod tests {
     }
 
     #[test]
-    fn frame_encode_radio_header() { 
-        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame 
+    fn frame_encode_radio_header() {
+        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let sh1 = AddressHeader::new(0b00000000_00000001, false);
         let rh1 = RecipientHeader::Direct(ah1);
@@ -848,20 +1006,20 @@ mod tests {
         let hb1 = h1.to_bytes();
         //assert_eq!(1, 0, "hb1: {:?}", hb1);
         assert_eq!(hb1[00], 0b0001_0001); // InfoHeader part
-        assert_eq!(hb1[01], 0b00000001);  // start of the RécipientHeader (number of recipients)
-        assert_eq!(hb1[02], 0b00000000);  // RecipientHeader > start of the recipient address
-        assert_eq!(hb1[03], 0b00000010);  // RecipientHeader > end of the recipient address
-        assert_eq!(hb1[04], 0b00000000);  // start of the sender address
-        assert_eq!(hb1[05], 0b00000001);  // end of the sender address
-        assert_eq!(hb1[06], 0b00000001);  // Number of payload
+        assert_eq!(hb1[01], 0b00000001); // start of the RécipientHeader (number of recipients)
+        assert_eq!(hb1[02], 0b00000000); // RecipientHeader > start of the recipient address
+        assert_eq!(hb1[03], 0b00000010); // RecipientHeader > end of the recipient address
+        assert_eq!(hb1[04], 0b00000000); // start of the sender address
+        assert_eq!(hb1[05], 0b00000001); // end of the sender address
+        assert_eq!(hb1[06], 0b00000001); // Number of payload
         let mut nonce_raw = [0u8; 8];
         nonce_raw.copy_from_slice(&hb1[7..15]);
-        assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708);  // nonce 
+        assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708); // nonce
     }
 
     #[test]
-    fn frame_decode_radio_header() { 
-        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame 
+    fn frame_decode_radio_header() {
+        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let sh1 = AddressHeader::new(0b00000000_00000001, false);
         let rh1 = RecipientHeader::Direct(ah1);
@@ -873,8 +1031,8 @@ mod tests {
             nonce: 0x0102030405060708,
         };
         let hb1 = h1.to_bytes();
-        
-        let (hbd1,_) = RadioHeaders::try_from_bytes(&hb1).expect("Failed to parse radio headers");
+
+        let (hbd1, _) = RadioHeaders::try_from_bytes(&hb1).expect("Failed to parse radio headers");
         assert_eq!(hbd1.rec_n_frames.0, h1.rec_n_frames.0);
         assert_eq!(hbd1.payloads, h1.payloads);
         assert_eq!(hbd1.sender.0, h1.sender.0);
@@ -886,8 +1044,8 @@ mod tests {
     }
 
     #[test]
-    fn frame_encode_radio_frame() { 
-        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame 
+    fn frame_encode_radio_frame() {
+        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let sh1 = AddressHeader::new(0b00000000_00000001, false);
         let rh1 = RecipientHeader::Direct(ah1);
@@ -898,37 +1056,34 @@ mod tests {
             sender: sh1,
             nonce: 0x0102030405060708,
         };
-        let pl1 : Vec<u8> = "HELO!".as_bytes().to_owned();
+        let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
-            headers: h1, 
+            headers: h1,
             acknowledgements: vec![],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
         //assert_eq!(1, 0, "hb1: {:?}", hb1);
         assert_eq!(rfb1[00], 0b0001_0001); // InfoHeader part
-        assert_eq!(rfb1[01], 0b00000001);  // start of the RécipientHeader (number of recipients)
-        assert_eq!(rfb1[02], 0b00000000);  // RecipientHeader > start of the recipient address
-        assert_eq!(rfb1[03], 0b00000010);  // RecipientHeader > end of the recipient address
-        assert_eq!(rfb1[04], 0b00000000);  // start of the sender address
-        assert_eq!(rfb1[05], 0b00000001);  // end of the sender address
-        assert_eq!(rfb1[06], 0b00000001);  // Number of payload
+        assert_eq!(rfb1[01], 0b00000001); // start of the RécipientHeader (number of recipients)
+        assert_eq!(rfb1[02], 0b00000000); // RecipientHeader > start of the recipient address
+        assert_eq!(rfb1[03], 0b00000010); // RecipientHeader > end of the recipient address
+        assert_eq!(rfb1[04], 0b00000000); // start of the sender address
+        assert_eq!(rfb1[05], 0b00000001); // end of the sender address
+        assert_eq!(rfb1[06], 0b00000001); // Number of payload
         let mut nonce_raw = [0u8; 8];
         nonce_raw.copy_from_slice(&rfb1[7..15]);
-        assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708);  // nonce 
-        assert_eq!(rfb1[15], 0); // Acknowledgement size (0) 
+        assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708); // nonce
+        assert_eq!(rfb1[15], 0); // Acknowledgement size (0)
         assert_eq!(rfb1[16], 0); // Length of the first payload (part1)
         assert_eq!(rfb1[17], 5); // Length of the first payload (part2) -- here 5
-        let pld1: Vec<u8> = rfb1[18..(18 + 5)]
-            .iter()
-            .map(|b| u8::from_be(*b))
-            .collect();
+        let pld1: Vec<u8> = rfb1[18..(18 + 5)].iter().map(|b| u8::from_be(*b)).collect();
         assert_eq!(pld1, pl1);
     }
 
     #[test]
-    fn frame_decode_radio_frame() { 
-        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame 
+    fn frame_decode_radio_frame() {
+        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let sh1 = AddressHeader::new(0b00000000_00000001, false);
         let rh1 = RecipientHeader::Direct(ah1);
@@ -939,15 +1094,16 @@ mod tests {
             sender: sh1,
             nonce: 0x0102030405060708,
         };
-        let pl1 : Vec<u8> = "HELO!".as_bytes().to_owned();
+        let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
-            headers: h1.clone(), 
+            headers: h1.clone(),
             acknowledgements: vec![],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
-        
-        let (rfd1,_) = RadioFrameWithHeaders::try_from_bytes(&rfb1).expect("Failed to parse radio frame");
+
+        let (rfd1, _) =
+            RadioFrameWithHeaders::try_from_bytes(&rfb1).expect("Failed to parse radio frame");
         assert_eq!(rfd1.headers.rec_n_frames.0, h1.rec_n_frames.0);
         assert_eq!(rfd1.headers.payloads, h1.payloads);
         assert_eq!(rfd1.headers.sender.0, h1.sender.0);
@@ -961,8 +1117,8 @@ mod tests {
     }
 
     #[test]
-    fn frame_encode_radio_frame_with_acknowledgement() { 
-        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame 
+    fn frame_encode_radio_frame_with_acknowledgement() {
+        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let ah2 = AddressHeader::new(0b00000001_00000000, false);
         let ah3 = AddressHeader::new(0b00000010_00000000, false);
@@ -979,55 +1135,52 @@ mod tests {
             sender: sh1,
             nonce: 0x0102030405060708,
         };
-        let pl1 : Vec<u8> = "HELO!".as_bytes().to_owned();
+        let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
-            headers: h1, 
+            headers: h1,
             acknowledgements: vec![(ah2, nonce1, drssi1), (ah3, nonce2, drssi2)],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
         //assert_eq!(1, 0, "hb1: {:?}", hb1);
         assert_eq!(rfb1[00], 0b0001_0001); // InfoHeader part
-        assert_eq!(rfb1[01], 0b00000001);  // start of the RécipientHeader (number of recipients)
-        assert_eq!(rfb1[02], 0b00000000);  // RecipientHeader > start of the recipient address
-        assert_eq!(rfb1[03], 0b00000010);  // RecipientHeader > end of the recipient address
-        assert_eq!(rfb1[04], 0b00000000);  // start of the sender address
-        assert_eq!(rfb1[05], 0b00000001);  // end of the sender address
-        assert_eq!(rfb1[06], 0b00000001);  // Number of payload
+        assert_eq!(rfb1[01], 0b00000001); // start of the RécipientHeader (number of recipients)
+        assert_eq!(rfb1[02], 0b00000000); // RecipientHeader > start of the recipient address
+        assert_eq!(rfb1[03], 0b00000010); // RecipientHeader > end of the recipient address
+        assert_eq!(rfb1[04], 0b00000000); // start of the sender address
+        assert_eq!(rfb1[05], 0b00000001); // end of the sender address
+        assert_eq!(rfb1[06], 0b00000001); // Number of payload
         let mut nonce_raw = [0u8; 8];
         nonce_raw.copy_from_slice(&rfb1[7..15]);
-        assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708);  // nonce 
-        assert_eq!(rfb1[15], 2); // Acknowledgement size (0) 
+        assert_eq!(u64::from_be_bytes(nonce_raw), 0x0102030405060708); // nonce
+        assert_eq!(rfb1[15], 2); // Acknowledgement size (0)
         let mut ah2_raw = [0u8; 2];
         ah2_raw.copy_from_slice(&rfb1[16..18]);
-        assert_eq!(u16::from_be_bytes(ah2_raw), ah2.0);  // address 2  
+        assert_eq!(u16::from_be_bytes(ah2_raw), ah2.0); // address 2
         let mut nonce1_raw = [0u8; 8];
         nonce1_raw.copy_from_slice(&rfb1[18..26]);
-        assert_eq!(u64::from_be_bytes(nonce1_raw), nonce1);  // nonce 1
+        assert_eq!(u64::from_be_bytes(nonce1_raw), nonce1); // nonce 1
         let mut drssi1_raw = [0u8; 2];
         drssi1_raw.copy_from_slice(&rfb1[26..28]);
-        assert_eq!(i16::from_be_bytes(drssi1_raw), drssi1);  // drssi 1
+        assert_eq!(i16::from_be_bytes(drssi1_raw), drssi1); // drssi 1
         let mut ah3_raw = [0u8; 2];
         ah3_raw.copy_from_slice(&rfb1[28..30]);
-        assert_eq!(u16::from_be_bytes(ah3_raw), ah3.0);  // address 3
+        assert_eq!(u16::from_be_bytes(ah3_raw), ah3.0); // address 3
         let mut nonce2_raw = [0u8; 8];
         nonce2_raw.copy_from_slice(&rfb1[30..38]);
-        assert_eq!(u64::from_be_bytes(nonce2_raw), nonce2);  // nonce 2
+        assert_eq!(u64::from_be_bytes(nonce2_raw), nonce2); // nonce 2
         let mut drssi2_raw = [0u8; 2];
         drssi2_raw.copy_from_slice(&rfb1[38..40]);
-        assert_eq!(i16::from_be_bytes(drssi2_raw), drssi2);  // drssi 2
+        assert_eq!(i16::from_be_bytes(drssi2_raw), drssi2); // drssi 2
         assert_eq!(rfb1[40], 0); // Length of the first payload (part1)
         assert_eq!(rfb1[41], 5); // Length of the first payload (part2) -- here 5
-        let pld1: Vec<u8> = rfb1[42..(42 + 5)]
-            .iter()
-            .map(|b| u8::from_be(*b))
-            .collect();
+        let pld1: Vec<u8> = rfb1[42..(42 + 5)].iter().map(|b| u8::from_be(*b)).collect();
         assert_eq!(pld1, pl1);
     }
 
     #[test]
-    fn frame_decode_radio_frame_with_acknowledgement() { 
-        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame 
+    fn frame_decode_radio_frame_with_acknowledgement() {
+        let ih1 = InfoHeader::new(1, 1); // 1 recipient, 1 frame
         let ah1 = AddressHeader::new(0b00000000_00000010, false);
         let ah2 = AddressHeader::new(0b00000001_00000000, false);
         let ah3 = AddressHeader::new(0b00000010_00000000, false);
@@ -1044,15 +1197,16 @@ mod tests {
             sender: sh1,
             nonce: 0x0102030405060708,
         };
-        let pl1 : Vec<u8> = "HELO!".as_bytes().to_owned();
+        let pl1: Vec<u8> = "HELO!".as_bytes().to_owned();
         let rf1 = RadioFrameWithHeaders {
-            headers: h1.clone(), 
+            headers: h1.clone(),
             acknowledgements: vec![(ah2, nonce1, drssi1), (ah3, nonce2, drssi2)],
             payloads: vec![pl1.clone()],
         };
         let rfb1 = rf1.to_bytes();
-        
-        let (rfd1,_) = RadioFrameWithHeaders::try_from_bytes(&rfb1).expect("Failed to parse radio frame");
+
+        let (rfd1, _) =
+            RadioFrameWithHeaders::try_from_bytes(&rfb1).expect("Failed to parse radio frame");
         assert_eq!(rfd1.headers.rec_n_frames.0, h1.rec_n_frames.0);
         assert_eq!(rfd1.headers.payloads, h1.payloads);
         assert_eq!(rfd1.headers.sender.0, h1.sender.0);
@@ -1062,13 +1216,12 @@ mod tests {
             _ => panic!("expected one recipient"),
         }
         assert_eq!(rfd1.acknowledgements.len(), 2);
-        assert_eq!(rfd1.acknowledgements[0].0.0, ah2.0);
+        assert_eq!(rfd1.acknowledgements[0].0 .0, ah2.0);
         assert_eq!(rfd1.acknowledgements[0].1, nonce1);
         assert_eq!(rfd1.acknowledgements[0].2, drssi1);
-        assert_eq!(rfd1.acknowledgements[1].0.0, ah3.0);
+        assert_eq!(rfd1.acknowledgements[1].0 .0, ah3.0);
         assert_eq!(rfd1.acknowledgements[1].1, nonce2);
         assert_eq!(rfd1.acknowledgements[1].2, drssi2);
         assert_eq!(rfd1.payloads[0], pl1);
     }
-
 }

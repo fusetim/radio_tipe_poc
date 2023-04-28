@@ -1,8 +1,8 @@
 //! Adaptive Transmission Power Control interfaces and basic implementations.
 //!
 //! This module provides the public trait to implement an ATPC at the application level.
-//! Moreover it provides two implementations, a naive implementation that basically disable 
-//! the ATPC and a [standard implementation](DefaultATPC) based on 
+//! Moreover it provides two implementations, a naive implementation that basically disable
+//! the ATPC and a [standard implementation](DefaultATPC) based on
 //! [Shan Lin's work](https://www.cs.virginia.edu/~stankovic/psfiles/ATPC.pdf).
 //!
 //! ## Usages
@@ -15,17 +15,17 @@
 use crate::device::frame::FrameNonce;
 use crate::LoRaAddress;
 
-use std::time::Instant;
 use std::cmp::Ordering;
 use std::num::NonZeroUsize;
 use std::time::Duration;
+use std::time::Instant;
 
-use lru::LruCache;
 use bitflags::bitflags;
+use lru::LruCache;
 
-/// Modelisation of the RSSI on the receiver end when the transmitter uses a particular 
+/// Modelisation of the RSSI on the receiver end when the transmitter uses a particular
 /// Transmission Power (Transmission Level).
-/// 
+///
 /// This model uses the following approximation: `RSSI = a * TP + b` for a particular `ControlModel(a,b)`.
 ///
 /// This model follows the design provided in [Shan Lin's work](https://www.cs.virginia.edu/~stankovic/psfiles/ATPC.pdf).
@@ -35,7 +35,7 @@ struct ControlModel(i16, i16);
 /// Status of a neighbor for the [DefaultATPC].
 #[derive(Clone, PartialEq, Eq, Debug)]
 enum NeighborStatus {
-    /// This neighbor has not yet answered to our beacons (or partially). We currently have no 
+    /// This neighbor has not yet answered to our beacons (or partially). We currently have no
     /// information on the transmission power needed for this peer.
     Initializing,
     /// This neighbor has been fully initialized. Its control model is valid. It was successfully built
@@ -47,13 +47,13 @@ enum NeighborStatus {
 #[derive(Clone, Debug)]
 struct NeighborModel {
     /// Address of this peer.
-    pub node_address: LoRaAddress, 
+    pub node_address: LoRaAddress,
     /// Status of the peer for the ATPC.
     pub status: NeighborStatus,
     /// Dedicated control model for this particular node.
     pub control_model: ControlModel,
     /// RSSI responses for the various transmissions power levels.
-    /// 
+    ///
     /// Those are calculated with the acknowledgments given by the peer. This includes
     /// the answers to our beacons.
     pub rssi: Vec<i16>,
@@ -88,7 +88,7 @@ impl NeighborModel {
         NeighborModel {
             node_address,
             status: NeighborStatus::Initializing,
-            control_model: ControlModel(0,0),
+            control_model: ControlModel(0, 0),
             rssi: vec![0; ntp],
         }
     }
@@ -97,12 +97,11 @@ impl NeighborModel {
 /// Abstract representation of an Adaptable Transmission Power Control (ATPC).
 ///
 /// This trait is an essential component of the [LoRaRadio](crate::device::radio::LoRaRadio).
-/// This is this module who determine for each peer the needed transmission power to successfully 
-/// transmit a frame to a neighbor while helping reducing the energy consumption due to radio 
+/// This is this module who determine for each peer the needed transmission power to successfully
+/// transmit a frame to a neighbor while helping reducing the energy consumption due to radio
 /// transmission.
 pub trait ATPC {
-
-    /// Should the radio transmit beacons ? It is mostly determined by the time elapsed from the last 
+    /// Should the radio transmit beacons ? It is mostly determined by the time elapsed from the last
     /// transmission of beacons and the registration of unknown peers that are waiting for initialization.
     fn is_beacon_needed(&self) -> bool;
 
@@ -115,12 +114,12 @@ pub trait ATPC {
     /// Registers a beacon with its transmission power (index in the [get_beacon_powers](ATPC::get_beacon_powers))
     /// and its nonce.
     ///
-    /// This ensures [report_successful_reception](ATPC::report_successful_reception) can correctly 
+    /// This ensures [report_successful_reception](ATPC::report_successful_reception) can correctly
     /// update the [ControlModel] of each neighbor.
     fn register_beacon(&mut self, tpi: usize, nonce: FrameNonce);
 
     /// Registers a neighbor. This indicates an interest by the radio to transmit data to this peer.
-    /// 
+    ///
     /// This function might cause (if the peer is unknown) a transmission of beacons.
     fn register_neighbor(&mut self, neighbor_addr: LoRaAddress) -> bool;
 
@@ -153,30 +152,34 @@ pub trait ATPC {
         }
     }
 
-    /// Reports the reception of an acknownledgment (maybe for a beacon) by a neighbor. 
+    /// Reports the reception of an acknownledgment (maybe for a beacon) by a neighbor.
     ///
-    /// This will update the [ControlModel] of this particular peer accordingly to the given 
+    /// This will update the [ControlModel] of this particular peer accordingly to the given
     /// `drssi` (Delta between the RSSI target and the received RSSI of this tranmission).
-    fn report_successful_reception(&mut self, neighbor_addr: LoRaAddress, nonce: FrameNonce, drssi: i16);
+    fn report_successful_reception(
+        &mut self,
+        neighbor_addr: LoRaAddress,
+        nonce: FrameNonce,
+        drssi: i16,
+    );
 
-    /// Reports the lack of acknownledgment (maybe for a beacon) by a neighbor. 
+    /// Reports the lack of acknownledgment (maybe for a beacon) by a neighbor.
     ///
     /// This will update the [ControlModel] of this particular peer accordingly
     fn report_failed_reception(&mut self, neighbor_addr: LoRaAddress);
-
 }
 
 /// Default implementation of the ATPC, based on [Shan Lin's work](https://www.cs.virginia.edu/~stankovic/psfiles/ATPC.pdf).
 ///
 /// It provides an efficient implementation that can adapt to its surrounding and with a small cost
-/// of only three beacon tranmissions per day. Moreover the design is pretty simple and offer 
+/// of only three beacon tranmissions per day. Moreover the design is pretty simple and offer
 /// good results in different real case scenarios.
 pub struct DefaultATPC {
     /// LRU Cache to remember the parameters associated with the most recent neighbors.
     neighbors: LruCache<LoRaAddress, NeighborModel>,
     /// The transmission powers usable by the ATPC (and the radio).
     transmission_powers: Vec<i8>,
-    /// The default transmission power (the index of it in `transmission_powers`) that will 
+    /// The default transmission power (the index of it in `transmission_powers`) that will
     /// be use if a node is unknown or still initializing.
     default_tp: u8,
     /// The minimal RSSI threashold that the radio will consider acceptable.
@@ -195,7 +198,13 @@ pub struct DefaultATPC {
 
 impl DefaultATPC {
     /// Builds a new instance of the Default ATPC.
-    pub fn new(transmission_powers: Vec<i8>, default_tp: impl Into<u8>, target_rssi: i16, lower_rssi: i16, beacon_delay: Duration) -> Self {
+    pub fn new(
+        transmission_powers: Vec<i8>,
+        default_tp: impl Into<u8>,
+        target_rssi: i16,
+        lower_rssi: i16,
+        beacon_delay: Duration,
+    ) -> Self {
         let default_tp_ = default_tp.into();
         let tp_len = transmission_powers.len();
         assert!(default_tp_ < tp_len as u8);
@@ -217,13 +226,27 @@ impl DefaultATPC {
     fn rebuid_neighbor_model(&mut self, neighbor_addr: LoRaAddress) {
         if let Some(neigh) = self.neighbors.get_mut(&neighbor_addr) {
             let n = self.transmission_powers.len();
-            let sum_tp : f32 = self.transmission_powers.iter().fold(0.0, |acc,x| acc + (*x as f32));
-            let sum_rssi : f32 = neigh.rssi.iter().fold(0.0, |acc,x| acc + (*x as f32));
-            let sum_tp_rssi : f32 = (0..self.transmission_powers.len()).into_iter().fold(0.0, |acc,i| acc + (self.transmission_powers[i] as f32) * (neigh.rssi[i] as f32));
-            let denominator : f32 = (n as  f32)*self.transmission_powers.iter().fold(0.0, |acc,x| acc + (*x as f32)*(*x as f32)) + sum_tp*sum_tp;
-                                   
-            neigh.control_model.0 = (((sum_rssi * sum_tp * sum_tp) - (sum_tp * sum_tp_rssi)) / denominator) as i16;
-            neigh.control_model.1 = ((((n as f32) * sum_tp_rssi) - (sum_tp * sum_rssi)) / denominator) as i16;
+            let sum_tp: f32 = self
+                .transmission_powers
+                .iter()
+                .fold(0.0, |acc, x| acc + (*x as f32));
+            let sum_rssi: f32 = neigh.rssi.iter().fold(0.0, |acc, x| acc + (*x as f32));
+            let sum_tp_rssi: f32 = (0..self.transmission_powers.len())
+                .into_iter()
+                .fold(0.0, |acc, i| {
+                    acc + (self.transmission_powers[i] as f32) * (neigh.rssi[i] as f32)
+                });
+            let denominator: f32 = (n as f32)
+                * self
+                    .transmission_powers
+                    .iter()
+                    .fold(0.0, |acc, x| acc + (*x as f32) * (*x as f32))
+                + sum_tp * sum_tp;
+
+            neigh.control_model.0 =
+                (((sum_rssi * sum_tp * sum_tp) - (sum_tp * sum_tp_rssi)) / denominator) as i16;
+            neigh.control_model.1 =
+                ((((n as f32) * sum_tp_rssi) - (sum_tp * sum_rssi)) / denominator) as i16;
             neigh.status = NeighborStatus::Runtime;
         }
     }
@@ -234,17 +257,26 @@ impl DefaultATPC {
     fn update_neighbor_model(&mut self, neighbor_addr: LoRaAddress, delta: i16) {
         let tp = self.get_tx_power(neighbor_addr);
         if let Some(neigh) = self.neighbors.get_mut(&neighbor_addr) {
-            if (delta > 0 && tp < self.transmission_powers[self.transmission_powers.len()-1]) || (delta < 0 && tp > self.transmission_powers[0]) {
+            if (delta > 0 && tp < self.transmission_powers[self.transmission_powers.len() - 1])
+                || (delta < 0 && tp > self.transmission_powers[0])
+            {
                 neigh.control_model.1 -= delta;
-            } 
+            }
         }
     }
 
     /// Calculates the transmission power needed for a particular node/neighbor.
     fn calc_node_tp(&mut self, neighbor_addr: LoRaAddress) -> i8 {
-        let neigh = self.neighbors.get(&neighbor_addr).expect("calculating TP for an inexistant neighbor.");
+        let neigh = self
+            .neighbors
+            .get(&neighbor_addr)
+            .expect("calculating TP for an inexistant neighbor.");
         let tp_target = (self.lower_rssi - neigh.control_model.1) / neigh.control_model.0;
-        if let Some(tp) = self.transmission_powers.iter().find(|tp| (**tp as i16) >= tp_target) {
+        if let Some(tp) = self
+            .transmission_powers
+            .iter()
+            .find(|tp| (**tp as i16) >= tp_target)
+        {
             return *tp;
         } else {
             return self.transmission_powers[self.transmission_powers.len() - 1];
@@ -253,10 +285,13 @@ impl DefaultATPC {
 }
 
 impl ATPC for DefaultATPC {
-
     fn is_beacon_needed(&self) -> bool {
-        return self.last_beacon.elapsed() > self.beacon_delay 
-            || self.neighbors.iter().find(|(_, n)| n.status == NeighborStatus::Initializing).is_some();
+        return self.last_beacon.elapsed() > self.beacon_delay
+            || self
+                .neighbors
+                .iter()
+                .find(|(_, n)| n.status == NeighborStatus::Initializing)
+                .is_some();
     }
 
     fn get_beacon_powers(&self) -> Vec<i8> {
@@ -296,7 +331,7 @@ impl ATPC for DefaultATPC {
         neighbor_addrs.sort();
         for na in &neighbor_addrs {
             let tp = self.get_tx_power(*na);
-            if tx_power.is_none() || tp == tx_power.unwrap(){
+            if tx_power.is_none() || tp == tx_power.unwrap() {
                 should_update.push(*na);
             } else if tp > tx_power.unwrap() {
                 tx_power = Some(tp);
@@ -307,11 +342,19 @@ impl ATPC for DefaultATPC {
         if let Some(tx_power) = tx_power {
             (tx_power, should_update)
         } else {
-            (self.transmission_powers[self.default_tp as usize], neighbor_addrs)
+            (
+                self.transmission_powers[self.default_tp as usize],
+                neighbor_addrs,
+            )
         }
     }
 
-    fn report_successful_reception(&mut self, neighbor_addr: LoRaAddress, nonce: FrameNonce, drssi: i16) {
+    fn report_successful_reception(
+        &mut self,
+        neighbor_addr: LoRaAddress,
+        nonce: FrameNonce,
+        drssi: i16,
+    ) {
         if let Some(tpi) = self.beacons.get(&nonce) {
             if let Some(neigh) = self.neighbors.get_mut(&neighbor_addr) {
                 neigh.rssi[*tpi as usize] = drssi;
@@ -322,7 +365,7 @@ impl ATPC for DefaultATPC {
         }
     }
 
-    fn report_failed_reception(&mut self, neighbor_addr: LoRaAddress){
+    fn report_failed_reception(&mut self, neighbor_addr: LoRaAddress) {
         self.update_neighbor_model(neighbor_addr, -30);
     }
 }
@@ -374,7 +417,7 @@ impl ATPC for TestingATPC {
     fn get_tx_power(&mut self, neighbor_addr: LoRaAddress) -> i8 {
         let tp = self.transmission_powers[self.counter];
         let len = self.transmission_powers.len();
-        self.counter =  (self.counter + 1) % len;
+        self.counter = (self.counter + 1) % len;
         return tp;
     }
 
@@ -382,11 +425,16 @@ impl ATPC for TestingATPC {
         return (self.get_tx_power(*&neighbor_addrs[0]), neighbor_addrs);
     }
 
-    fn report_successful_reception(&mut self, neighbor_addr: LoRaAddress, nonce: FrameNonce, drssi: i16) {
+    fn report_successful_reception(
+        &mut self,
+        neighbor_addr: LoRaAddress,
+        nonce: FrameNonce,
+        drssi: i16,
+    ) {
         // NO OP
     }
 
-    fn report_failed_reception(&mut self, neighbor_addr: LoRaAddress){
+    fn report_failed_reception(&mut self, neighbor_addr: LoRaAddress) {
         // NO OP
     }
 }

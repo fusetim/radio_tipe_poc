@@ -39,10 +39,8 @@ fn main() -> Result<()> {
     esp_idf_logger::init().unwrap();
     log::info!("Log stuff={} and={}", 1, "hi");
 
-    #[allow(unused)]
     let peripherals = Peripherals::take().unwrap();
 
-    #[allow(unused)]
     let pins = peripherals.pins;
 
     /* SPI Pinout
