@@ -4,9 +4,11 @@ use anyhow::{anyhow, Result};
 use esp_idf_hal::delay;
 use esp_idf_hal::prelude::*;
 //use embedded_hal::blocking::delay::{DelayMs, DelayUs};
-use esp_idf_hal::gpio::{AnyIOPin, InputPin as GpioInputPin, OutputPin as GpioOutputPin, PinDriver};
-use esp_idf_hal::spi::{self, SPI2, Dma, SpiDriver, SpiDeviceDriver};
-use esp_idf_hal::spi::config::{Config as SpiConfig};
+use esp_idf_hal::gpio::{
+    AnyIOPin, InputPin as GpioInputPin, OutputPin as GpioOutputPin, PinDriver,
+};
+use esp_idf_hal::spi::config::Config as SpiConfig;
+use esp_idf_hal::spi::{self, Dma, SpiDeviceDriver, SpiDriver, SPI2};
 use esp_idf_hal::units::{KiloHertz, MegaHertz};
 
 use embedded_hal::blocking::delay::DelayMs;
@@ -24,14 +26,18 @@ use radio_tipe_poc::device::radio::LoRaRadio;
 
 use core::fmt::Debug;
 
-mod echo_server;
 mod echo_client;
+mod echo_server;
 
-
-const LORA_FREQUENCIES: [KiloHertz; 5] = [KiloHertz(869525),KiloHertz(867700),KiloHertz(867500),KiloHertz(867300),KiloHertz(867100)]; // EU-868MHz band
+const LORA_FREQUENCIES: [KiloHertz; 5] = [
+    KiloHertz(869525),
+    KiloHertz(867700),
+    KiloHertz(867500),
+    KiloHertz(867300),
+    KiloHertz(867100),
+]; // EU-868MHz band
 const LORA_SPI_FREQUENCY: MegaHertz = MegaHertz(1); // MHz
-const DEVICE_NAME: &'static str = "esp32-u1";
-type LoraSpi = spi::SPI2;
+
 
 fn main() -> Result<()> {
     println!("Hello, world!");
@@ -50,10 +56,16 @@ fn main() -> Result<()> {
      * NSS / nCS:   17
      * RESET:       16
      */
-    let driver = SpiDriver::new::<SPI2>(peripherals.spi2, pins.gpio5, pins.gpio18, Some(pins.gpio19), Dma::Disabled)?;
+    let driver = SpiDriver::new::<SPI2>(
+        peripherals.spi2,
+        pins.gpio5,
+        pins.gpio18,
+        Some(pins.gpio19),
+        Dma::Disabled,
+    )?;
     let config = SpiConfig::new().baudrate(LORA_SPI_FREQUENCY.into());
     let mut device = SpiDeviceDriver::new(&driver, None as Option<AnyIOPin>, &config)?;
-    let mut lora = setup_lora(
+    let lora = setup_lora(
         device,
         PinDriver::input_output(pins.gpio17)?.into_output()?,
         PinDriver::input_output(pins.gpio16)?.into_input_output()?,
@@ -68,26 +80,41 @@ fn main() -> Result<()> {
         poll_delay: 250_000,        // 250ms
         duty_interval: 120_000_000, // 2min
     };
-    let channels : Vec<radio_tipe_poc::device::radio::Channel<Channel>> = LORA_FREQUENCIES.into_iter().map(|freq| {
-        let radio_channel = Channel::LoRa(LoRaChannel{
-            freq: freq.into(),
-            sf: SpreadingFactor::Sf9,
-            ..Default::default()
-        });
-        radio_tipe_poc::device::radio::Channel {
-            radio_channel,
-            delay: delay_params.clone(),
-        }
-    }).collect();
+    let channels: Vec<radio_tipe_poc::device::radio::Channel<Channel>> = LORA_FREQUENCIES
+        .into_iter()
+        .map(|freq| {
+            let radio_channel = Channel::LoRa(LoRaChannel {
+                freq: freq.into(),
+                sf: SpreadingFactor::Sf9,
+                ..Default::default()
+            });
+            radio_tipe_poc::device::radio::Channel {
+                radio_channel,
+                delay: delay_params.clone(),
+            }
+        })
+        .collect();
 
     let atpc = radio_tipe_poc::device::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
 
-    let mut device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0011);
-    let mut handler = echo_client::EchoClient::new(device, vec!("HELO1", "HELO2", "Enchante de pouvoir communiquer avec vous!").into_iter().map(|s| s.as_bytes().to_owned()).collect());
-    
-    //let mut device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0010);
+    let device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0011);
+    let mut handler = echo_client::EchoClient::new(
+        device,
+        vec![
+            "HELO1",
+            "HELO2",
+            "Enchante de pouvoir communiquer avec vous!",
+        ]
+        .into_iter()
+        .map(|s| s.as_bytes().to_owned())
+        .collect(),
+    );
+
+    //let device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0010);
     //let mut handler = echo_server::EchoServer::new(device);
-    handler.spawn().map_err(|err| anyhow!("Handler error!\ncause: {:?}", err))?;
+    handler
+        .spawn()
+        .map_err(|err| anyhow!("Handler error!\ncause: {:?}", err))?;
 
     println!("Stopping!");
 

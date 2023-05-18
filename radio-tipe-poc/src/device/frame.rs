@@ -2,16 +2,11 @@
 
 /// Discriminant for a frame.
 pub enum FrameType {
-    /// A *simple* message.
+    /// A *simple* frame with one or more payloads.
     Message = 0,
-    //    Acknowledgment = 1, - DEPRECATED
-    //    RelayAnnouncement = 2,
-    //    RelayAnnouncementAcknowledgment = 3, - DEPRECATED
-    //    RelayMessage = 4, // Use the same Frame template as Message, just a different FrameType.
-    //    RelayAcknowledgment = 5, // Use the same Frame template as Acknowledgment, just a different FrameType. - DEPRECATED
-    /// A beacon message, that can be safely ignored.
+    /// A BEACON frame produced by an ATPC.
+    /// This frame might be ignored by the recipient.
     BroadcastCheckSignal = 6,
-    //  BroadcastCheckSignalReply = 7,
 }
 
 /// Trait to calculate size on frame for every component on frame.
@@ -36,11 +31,11 @@ pub struct RadioHeaders {
     pub payloads: u8,
     /// Sender address
     pub sender: AddressHeader,
-    /// TODO / PROPOSAL / SECURITY : use timestamp + 16 random bits
+    /// A cryptographic nonce
     ///
     /// Nonce MUST follow a total order.
     pub nonce: FrameNonce,
-    // TODO / PROPOSAL / SECURITY : add frame signature (64 bytes for Ed25519)
+    // TODO - SECURITY : add frame signature (64 bytes for Ed25519)
     // pub signature: [u8; 64];
 }
 
@@ -437,7 +432,7 @@ impl RadioFrameWithHeaders {
         cursor += 1;
         for _i in 0..(ack_size as usize) {
             if bytes.len() < cursor + 2 + FRAME_NONCE_SIZE {
-                // TODO: Remove hardcoded constante!!
+                // TODO: Remove hardcoded constant
                 return Err(FrameError::InvalidHeader {
                     context: Some(format!("Fail to read acknowledgment at byte {}!", cursor)),
                 });
@@ -1006,7 +1001,7 @@ mod tests {
         let hb1 = h1.to_bytes();
         //assert_eq!(1, 0, "hb1: {:?}", hb1);
         assert_eq!(hb1[00], 0b0001_0001); // InfoHeader part
-        assert_eq!(hb1[01], 0b00000001); // start of the RécipientHeader (number of recipients)
+        assert_eq!(hb1[01], 0b00000001); // start of the RecipientHeader (number of recipients)
         assert_eq!(hb1[02], 0b00000000); // RecipientHeader > start of the recipient address
         assert_eq!(hb1[03], 0b00000010); // RecipientHeader > end of the recipient address
         assert_eq!(hb1[04], 0b00000000); // start of the sender address
@@ -1065,7 +1060,7 @@ mod tests {
         let rfb1 = rf1.to_bytes();
         //assert_eq!(1, 0, "hb1: {:?}", hb1);
         assert_eq!(rfb1[00], 0b0001_0001); // InfoHeader part
-        assert_eq!(rfb1[01], 0b00000001); // start of the RécipientHeader (number of recipients)
+        assert_eq!(rfb1[01], 0b00000001); // start of the RecipientHeader (number of recipients)
         assert_eq!(rfb1[02], 0b00000000); // RecipientHeader > start of the recipient address
         assert_eq!(rfb1[03], 0b00000010); // RecipientHeader > end of the recipient address
         assert_eq!(rfb1[04], 0b00000000); // start of the sender address
@@ -1144,7 +1139,7 @@ mod tests {
         let rfb1 = rf1.to_bytes();
         //assert_eq!(1, 0, "hb1: {:?}", hb1);
         assert_eq!(rfb1[00], 0b0001_0001); // InfoHeader part
-        assert_eq!(rfb1[01], 0b00000001); // start of the RécipientHeader (number of recipients)
+        assert_eq!(rfb1[01], 0b00000001); // start of the RecipientHeader (number of recipients)
         assert_eq!(rfb1[02], 0b00000000); // RecipientHeader > start of the recipient address
         assert_eq!(rfb1[03], 0b00000010); // RecipientHeader > end of the recipient address
         assert_eq!(rfb1[04], 0b00000000); // start of the sender address

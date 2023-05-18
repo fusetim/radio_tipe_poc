@@ -80,7 +80,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 
 use std::io::Cursor;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use super::frame;
 use frame::{FrameSize, FrameType, RadioFrameWithHeaders, RadioHeaders, RecipientHeader};
@@ -140,7 +140,6 @@ where
 type RadioState = radio_sx127x::device::State;
 
 /// Radio physical device representation.
-//
 // TODO: Remove dependencies to radio_sx127x, using a generic trait with the companion types specifying
 // the HAL-specific interfaces.
 pub trait Radio<C, E>:
@@ -288,6 +287,15 @@ where
                 recipients.insert((*ah).into(), frame::PayloadFlag::new(&[]));
             }
         }
+        let ts = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .expect("SystemTime is before UNIX_EPOCH?!")
+            .as_secs();
+        let mut rp = [0u8; 2];
+        // Error silenced here!
+        let _ = getrandom::getrandom(&mut rp);
+        let nonce = (ts << 16) + ((rp[1] as u64) << 8) + (rp[0] as u64);
+
         // Builds the frame based on the number of recipients.
         match recipients.len() {
             0 => Err(RadioError::InvalidRecipentsError {
@@ -299,7 +307,7 @@ where
                     recipients: frame::RecipientHeader::Direct(recipients.iter().map(|(dest, _pf)| *dest).next().expect("First recipient does not exist while there is one recipient registered!")),
                     payloads: payloads.len() as u8,
                     sender: self.address.into(),
-                    nonce: 0x1001, // TODO: implement nonce!!
+                    nonce,
                 };
                 let ffsize = headers.size() + tx_buf_acknowledgments.size();
                 if ffsize > MAX_LORA_PAYLOAD {
@@ -324,7 +332,7 @@ where
                     recipients: frame::RecipientHeader::Group(recipients.into_iter().collect()),
                     payloads: payloads.len() as u8,
                     sender: self.address.into(),
-                    nonce: 0, // TODO: Implement nonce!!
+                    nonce,
                 };
                 let ffsize = headers.size() + tx_buf_acknowledgments.size();
                 if ffsize > MAX_LORA_PAYLOAD {
@@ -687,8 +695,6 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                 if buf[0] != (FrameType::Message as u8)
                     && buf[0] != (FrameType::BroadcastCheckSignal as u8)
                 {
-                    // TODO: Handle other frame types
-                    // For now, it is ignored as not a inbound message.
                     info!(
                         "Packet ignored: FrameType is not Message, it is {}!",
                         buf[0]
@@ -714,7 +720,6 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                         }
                     }
                     _ => {
-                        // TODO: Implement relay logic there.
                         info!("Message ignored because it is not addressed for us.");
                         false
                     }
@@ -759,7 +764,6 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> Device<'a> for LoRaRadio<'
                             return Ok(false);
                         }
                         let mut buf_fp = [0u8; 256];
-                        // TODO: use the packet_info metadata like RSSI to calculate ATRP.
                         let (_size, _packet_info) = self
                             .radio
                             .get_received(&mut buf_fp)
@@ -871,7 +875,8 @@ impl<'a, A: ATPC, C: Debug, E: Debug, T: Radio<C, E>> LoRaRadio<'a, A, T, C, E> 
         }
         // Checking channels are available (well that the first one is available in reality based on protocol
         // assumptions).
-        let mut free_channel = true; // TODO: For testing purposes only!!
+        // For testing purposes you might want to force this value to true.
+        let mut free_channel = false;
         let mut attemps = 0;
         while !free_channel && attemps < MAX_ATTEMPT_FREE_CHANNEL {
             self.radio

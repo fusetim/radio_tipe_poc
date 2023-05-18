@@ -77,12 +77,11 @@ pub enum QueueError<T> {
 /// Device trait represents a unit system that can receive and send messages using
 /// some complex features like Adaptive-Rate-Power-Rate, Acknowledgment or Packet Aggregation.
 ///
-/// TODO: Give default implementation for most of the inner method when they are not related to
-/// a specifi radio implementation.
-///
-/// TODO: Implement a Mock device using the MockRadio provided by the radio crate.
-///
 /// A small example is available at the [module level](crate::device::device).
+// TODO: Give default implementation for most of the inner method when they are not related to
+// a specific radio implementation.
+//
+// TODO: Implement a Mock device using the MockRadio provided by the radio crate.
 pub trait Device<'a> {
     type DeviceError;
 
