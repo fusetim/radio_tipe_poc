@@ -58,7 +58,7 @@
 //! }
 //! ```
 
-use crate::device::frame::FrameNonce;
+use crate::frame::FrameNonce;
 use crate::{LoRaAddress, LoRaDestination};
 use std::sync::Arc;
 
@@ -77,7 +77,7 @@ pub enum QueueError<T> {
 /// Device trait represents a unit system that can receive and send messages using
 /// some complex features like Adaptive-Rate-Power-Rate, Acknowledgment or Packet Aggregation.
 ///
-/// A small example is available at the [module level](crate::device::device).
+/// A small example is available at the [module level](crate::device).
 // TODO: Give default implementation for most of the inner method when they are not related to
 // a specific radio implementation.
 //

@@ -6,13 +6,13 @@
 //! [Shan Lin's work](https://www.cs.virginia.edu/~stankovic/psfiles/ATPC.pdf).
 //!
 //! ## Usages
-//! Either just use a provided implementation and passed it to your [LoRaRadio](crate::device::radio::LoRaRadio).
+//! Either just use a provided implementation and passed it to your [LoRaRadio](crate::radio::LoRaRadio).
 //! ```rust,ignore
-//! let atpc = radio_tipe_poc::device::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
+//! let atpc = radio_tipe_poc::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
 //! let mut device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0011);
 //! ```
 //! Or implement your own ATPC by creating your structure who implement the [ATPC] trait.
-use crate::device::frame::FrameNonce;
+use crate::frame::FrameNonce;
 use crate::LoRaAddress;
 
 use std::cmp::Ordering;

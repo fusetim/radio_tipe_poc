@@ -24,11 +24,12 @@
 //! and will not enforce authenticity neither integrity of the communication.
 //!
 //! ## Usage
-//! Some examples are available at modules [device::device] and [device::radio].
+//! Some examples are available at modules [crate::device] and [crate::radio].
 
+pub mod atpc;
 pub mod device;
-pub mod error;
-pub mod socket;
+pub mod frame;
+pub mod radio;
 
 /// Representation of the recipients for a particular message that will be
 /// send or has been received by the LoRa radio.

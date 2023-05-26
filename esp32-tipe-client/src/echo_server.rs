@@ -1,7 +1,7 @@
 use anyhow::bail;
 use log::warn;
-use radio_tipe_poc::device::device::{Device, QueueError, RxClient, TxClient};
-use radio_tipe_poc::device::frame::FrameNonce;
+use radio_tipe_poc::device::{Device, QueueError, RxClient, TxClient};
+use radio_tipe_poc::frame::FrameNonce;
 use radio_tipe_poc::LoRaAddress;
 use radio_tipe_poc::LoRaDestination;
 use std::fmt::Debug;

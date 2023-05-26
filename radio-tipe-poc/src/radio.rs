@@ -25,13 +25,13 @@
 //!```
 //!
 //! Once you have a SX127x radio, you just have to define your channels (and their associated
-//! [DelayParams](radio_tipe_poc::device::radio::DelayParams)).
+//! [DelayParams](radio_tipe_poc::radio::DelayParams)).
 //!
 //!```rust,ignore
 //!    const LORA_FREQUENCIES: [KiloHertz; 5] = [KiloHertz(869525),KiloHertz(867700),KiloHertz(867500),KiloHertz(867300),KiloHertz(867100)]; // EU-868MHz band
 //!    
 //!    // Delay params for all channels
-//!    let delay_params = radio_tipe_poc::device::radio::DelayParams {
+//!    let delay_params = radio_tipe_poc::radio::DelayParams {
 //!        duty_cycle: 0.01,           // 1%
 //!        min_delay: 10_000_000,      // 10s
 //!        poll_delay: 100_000,        // 100ms
@@ -39,13 +39,13 @@
 //!    };
 //!
 //!    // The channel list
-//!    let channels : Vec<radio_tipe_poc::device::radio::Channel<Channel>> = LORA_FREQUENCIES.into_iter().map(|freq| {
+//!    let channels : Vec<radio_tipe_poc::radio::Channel<Channel>> = LORA_FREQUENCIES.into_iter().map(|freq| {
 //!        let radio_channel = Channel::LoRa(LoRaChannel{
 //!            freq: freq.into(),
 //!            sf: SpreadingFactor::Sf9,
 //!            ..Default::default()
 //!        });
-//!        radio_tipe_poc::device::radio::Channel {
+//!        radio_tipe_poc::radio::Channel {
 //!            radio_channel,
 //!            delay: delay_params.clone(),
 //!        }
@@ -56,7 +56,7 @@
 //! And we will have a fully functional device!
 //!
 //! ```rust,ignore
-//!    let atpc = radio_tipe_poc::device::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
+//!    let atpc = radio_tipe_poc::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
 //!
 //!    let mut device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0011);
 //!```
@@ -68,24 +68,20 @@ use log::info;
 use radio::{Interrupts, Power, Receive, ReceiveInfo, State, Transmit};
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::io::{Cursor, Write};
+use std::marker::PhantomData;
+use std::time::{Duration, Instant, SystemTime};
 
 use ringbuf::HeapRb;
 use ringbuf::Rb;
 
-use super::device::{Device, QueueError, RxClient, TxClient};
-use crate::device::frame::AddressHeader;
-use crate::device::frame::FrameNonce;
+use crate::atpc::ATPC;
+use crate::device::{Device, QueueError, RxClient, TxClient};
+use crate::frame::{
+    self, AddressHeader, FrameNonce, FrameSize, FrameType, RadioFrameWithHeaders, RadioHeaders,
+    RecipientHeader,
+};
 use crate::{LoRaAddress, LoRaDestination};
-use std::io::Write;
-use std::marker::PhantomData;
-
-use std::io::Cursor;
-use std::time::{Duration, Instant, SystemTime};
-
-use super::frame;
-use frame::{FrameSize, FrameType, RadioFrameWithHeaders, RadioHeaders, RecipientHeader};
-
-use super::atpc::ATPC;
 
 /// Maximum length of a frame.
 ///

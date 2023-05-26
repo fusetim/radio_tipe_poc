@@ -10,17 +10,14 @@ pio = ["esp-idf-sys/pio"]
 [dependencies]
 esp-idf-sys = { version = "0.32", features = ["binstart"] }
 embedded-svc = "0.24"
-#esp-idf-svc = "0.41.2"
 esp-idf-hal = "0.40"
 embedded-hal = "0.2"
 anyhow = "1"
 radio = {path = "../radio-hal"}
-#sx127x_lora = "^0.3"
 radio-sx127x = { path = "../rust-radio-sx127x" }
 radio-tipe-poc = { path = "../radio-tipe-poc" }
 log = "*"
 esp_idf_logger = "0.1.1"
-#chrono = {version = "0.3.0"}
 esp-backtrace = { version = "0.5", features = ["esp32", "panic-handler", "exception-handler", "print-uart"]}
 
 [build-dependencies]

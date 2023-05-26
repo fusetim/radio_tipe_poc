@@ -20,7 +20,7 @@ use radio_sx127x::device::lora::{LoRaChannel, SpreadingFactor};
 use radio_sx127x::device::{Channel, Config, PaConfig, PaSelect};
 use radio_sx127x::Sx127xSpi;
 
-use radio_tipe_poc::device::radio::LoRaRadio;
+use radio_tipe_poc::radio::LoRaRadio;
 
 //use esp_backtrace as _;
 
@@ -74,13 +74,13 @@ fn main() -> Result<()> {
     println!("LoRa radio is ready.");
 
     // Init TIPE PoC Client
-    let delay_params = radio_tipe_poc::device::radio::DelayParams {
+    let delay_params = radio_tipe_poc::radio::DelayParams {
         duty_cycle: 0.01,
         min_delay: 30_000_000,      // 10s
         poll_delay: 250_000,        // 250ms
         duty_interval: 120_000_000, // 2min
     };
-    let channels: Vec<radio_tipe_poc::device::radio::Channel<Channel>> = LORA_FREQUENCIES
+    let channels: Vec<radio_tipe_poc::radio::Channel<Channel>> = LORA_FREQUENCIES
         .into_iter()
         .map(|freq| {
             let radio_channel = Channel::LoRa(LoRaChannel {
@@ -88,14 +88,14 @@ fn main() -> Result<()> {
                 sf: SpreadingFactor::Sf9,
                 ..Default::default()
             });
-            radio_tipe_poc::device::radio::Channel {
+            radio_tipe_poc::radio::Channel {
                 radio_channel,
                 delay: delay_params.clone(),
             }
         })
         .collect();
 
-    let atpc = radio_tipe_poc::device::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
+    let atpc = radio_tipe_poc::atpc::TestingATPC::new(vec![10, 8, 6, 4, 2]);
 
     let device = LoRaRadio::new(lora, &channels, atpc, -100, None, None, 0b0101_0011);
     let mut handler = echo_client::EchoClient::new(
